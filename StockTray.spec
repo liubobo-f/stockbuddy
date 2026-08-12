@@ -10,9 +10,23 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        # 未使用的 tkinter 子模块（体积较大）
+        'tkinter.ttk', 'tkinter.tix', 'tkinter.scrolledtext',
+        'tkinter.colorchooser', 'tkinter.dnd', 'tkinter.font',
+        'tkinter.simpledialog', 'tkinter.messagebox',
+        'tkinter.filedialog', 'tkinter.test',
+        # 未使用的标准库大模块
+        'unittest', 'test', 'pydoc', 'doctest',
+        'xml', 'multiprocessing', 'concurrent.futures',
+        'curses', 'lib2to3', 'ensurepip',
+        'pdb', 'pickletools', 'difflib',
+        # 未使用的第三方依赖
+        'matplotlib', 'numpy', 'scipy', 'pandas',
+        'cryptography', 'OpenSSL',
+    ],
     noarchive=False,
-    optimize=0,
+    optimize=1,
 )
 pyz = PYZ(a.pure)
 
@@ -25,7 +39,7 @@ exe = EXE(
     name='StockTray',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
+    strip=True,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
