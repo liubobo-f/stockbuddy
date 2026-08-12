@@ -208,7 +208,7 @@ class TencentSource(QuoteSource):
         resp.raise_for_status()
         text = self.decode_gbk(resp)
 
-        out = {}
+        quotes = {}
         for line in text.split(";"):
             line = line.strip()
             if "=" not in line or "v_" not in line:
@@ -218,19 +218,19 @@ class TencentSource(QuoteSource):
             val = val.strip().strip('"').strip("'")
             if not val:
                 continue
-            p = val.split("~")
-            if len(p) < 33:
+            parts = val.split("~")
+            if len(parts) < 33:
                 continue
-            nm = self.norm_name(p[1])
-            price = self.to_float(p[3])
+            name = self.norm_name(parts[1])
+            price = self.to_float(parts[3])
             if not self.valid_price(price):
                 continue
-            out[code] = QuoteRow(
-                code=code, name=nm or code,
-                price=price, pct=self.to_float(p[32]))
-        if not out:
+            quotes[code] = QuoteRow(
+                code=code, name=name or code,
+                price=price, pct=self.to_float(parts[32]))
+        if not quotes:
             raise RuntimeError(f"{self.name}接口未返回任何有效数据")
-        return out
+        return quotes
 
 
 class SinaSource(QuoteSource):
@@ -252,7 +252,7 @@ class SinaSource(QuoteSource):
         resp.raise_for_status()
         text = self.decode_gbk(resp)
 
-        out = {}
+        quotes = {}
         for line in text.splitlines():
             line = line.strip()
             if "hq_str_" not in line or "=" not in line:
@@ -262,21 +262,21 @@ class SinaSource(QuoteSource):
             val = val.strip().strip('"').strip("'")
             if not val:
                 continue
-            p = val.split(",")
-            if len(p) < 4:
+            parts = val.split(",")
+            if len(parts) < 4:
                 continue
-            nm = self.norm_name(p[0])
-            price = self.to_float(p[3])
-            prev = self.to_float(p[2])
+            name = self.norm_name(parts[0])
+            price = self.to_float(parts[3])
+            prev_close = self.to_float(parts[2])
             if not self.valid_price(price):
                 continue
-            chg = price - prev if prev else 0.0
-            pct = (chg / prev * 100.0) if prev else 0.0
-            out[code] = QuoteRow(
-                code=code, name=nm or code, price=price, pct=pct)
-        if not out:
+            chg = price - prev_close if prev_close else 0.0
+            pct = (chg / prev_close * 100.0) if prev_close else 0.0
+            quotes[code] = QuoteRow(
+                code=code, name=name or code, price=price, pct=pct)
+        if not quotes:
             raise RuntimeError(f"{self.name}接口未返回任何有效数据")
-        return out
+        return quotes
 
 
 class EastmoneySource(QuoteSource):
@@ -309,22 +309,22 @@ class EastmoneySource(QuoteSource):
             raise RuntimeError(f"{self.name}未返回数据")
         by_secid = {f"{r.get('f13')}.{r.get('f12')}": r for r in diff}
 
-        out = {}
+        quotes = {}
         for c in codes:
             secid = self.resolve_secid(c)
             row = by_secid.get(secid)
             if not row:
                 continue
-            nm = row.get("f14") or c
+            name = row.get("f14") or c
             price = row.get("f2")
             if not self.valid_price(price):
                 continue
-            out[c.strip().lower()] = QuoteRow(
-                code=c.strip().lower(), name=nm,
+            quotes[c.strip().lower()] = QuoteRow(
+                code=c.strip().lower(), name=name,
                 price=price, pct=self.to_float(row.get("f3")))
-        if not out:
+        if not quotes:
             raise RuntimeError(f"{self.name}无有效行情")
-        return out
+        return quotes
 
 
 # ============================================================================
