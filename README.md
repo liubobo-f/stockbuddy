@@ -5,8 +5,8 @@
 ## 功能
 1. **行情直显**：菜单顶部列出每只自选股的最新价与涨跌幅（▲涨/▼跌），含更新时间。
    - 交易时段（周一~周五 9:15-11:35、13:00-15:05）实时刷新，每 30 秒一次，也可点「🔄 刷新行情」立即更新。
-   - 非交易时段显示当日收盘价，仅在改配置或手动刷新时联网，不频繁刷新。
-2. **修改自选股**：点击直接用记事本打开 `stocks.csv`，无弹窗、无 cmd。
+   - 非交易时段显示当日收盘价。
+2. **修改自选股**：点击直接用记事本打开 `stocks.csv`。
 3. **退出**：退出程序。
 
 > 股票名称无需配置，运行时自动从行情接口获取。
@@ -33,23 +33,4 @@ sz000001
 ```bat
 python stock_tray.py
 ```
-**exe**（推荐，无黑框）：双击 `dist/StockTray.exe`。
 
-## 重新打包
-```bat
-.venv\Scripts\pyinstaller --noconsole --onefile --name StockTray ^
-  --hidden-import=pystray._win32 --hidden-import=pythoncom ^
-  --hidden-import=win32gui --hidden-import=win32con --hidden-import=pystray ^
-  stock_tray.py
-```
-> 受管 Python 缺 tkinter，需用自带 tkinter 的 Python 3.11 建 `.venv` 再打包。
-
-## 排错
-- 菜单显示「获取失败」时，失败原因直接在右侧列出。
-- 诊断日志：`%APPDATA%\StockTray\debug.log`；启动行 `=== StockTray 启动 build=... ===` 可确认版本（当前 `20260812.2`）。
-- 多源容灾下，单路失败不会整页报错。
-
-## 更新记录
-- **build 20260812.2**：精简代码（移除未用 import / 冗余字段、规范风格）与 README；行情菜单不再标注数据来源。
-- **build 20260812.1**：移除行情菜单项右侧的 `(腾讯)`/`(新浪)`/`(东方财富)` 来源标签，界面更简洁。
-- **build 20260811.18**：行情抓取改为多数据源容灾（腾讯→新浪→东方财富），修复东方财富连接被重置导致的整页失败。
