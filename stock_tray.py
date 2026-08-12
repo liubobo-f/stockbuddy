@@ -18,7 +18,7 @@ from datetime import datetime
 
 import tkinter as tk
 from PIL import Image, ImageDraw
-from pystray import Icon
+from pystray import Icon, Menu, MenuItem
 
 from quote_fetcher import QuoteFetcher, TradingSchedule, QuoteRow, debug_log
 
@@ -26,7 +26,6 @@ from config import (
     APP_NAME, APP_TITLE, BUILD,
     BG_TIMEOUT, MENU_TIMEOUT, CONFIG_DIR, BG_REFRESH_INTERVAL,
     DEFAULT_STOCKS,
-    MENU_ITEM_WIDTH, MENU_PRICE_WIDTH, MENU_PCT_WIDTH,
 )
 
 
@@ -80,36 +79,6 @@ class StockConfig:
 
 
 # ============================================================================
-# 菜单格式化（调试/测试用，弹窗菜单使用 tkinter grid 布局）
-# ============================================================================
-def _display_width(text):
-    """估算字符串在等宽字体中的显示宽度（CJK 字符约 2 格，ASCII 约 1 格）。"""
-    width = 0
-    for char in text:
-        width += 2 if ord(char) > 127 else 1
-    return width
-
-
-def _pad_right(text, target_width):
-    """右填充空格使文本达到目标显示宽度。"""
-    current = _display_width(text)
-    return text + " " * max(1, target_width - current)
-
-
-def _format_quote_label(row: QuoteRow):
-    """格式化单只股票菜单项文本：名称左对齐，价格和涨跌幅分别右对齐。"""
-    arrow = "▲" if row.pct > 0 else ("▼" if row.pct < 0 else "—")
-    sign = "+" if row.pct > 0 else ""
-    price_str = f"{row.price:.2f}" if isinstance(row.price, (int, float)) else "-"
-
-    price_col = f"{price_str:>{MENU_PRICE_WIDTH}}"
-    pct_col = f"{arrow}{sign}{row.pct:.2f}%".rjust(MENU_PCT_WIDTH)
-
-    left = _pad_right(row.name, MENU_ITEM_WIDTH - MENU_PRICE_WIDTH - MENU_PCT_WIDTH)
-    return f"{left}{price_col}  {pct_col}"
-
-
-# ============================================================================
 # 系统主题检测 + 配色方案
 # ============================================================================
 _THEME_LIGHT = "light"
@@ -123,10 +92,10 @@ _PALETTE = {
         "header_fg":   "#333333",
         "hover":       "#D8D8D8",
         "separator":   "#D0D0D0",
-        "up":          "#C62828",
-        "down":        "#2E7D32",
+        "up":          "#B0685A",          # 涨：低饱和砖红
+        "down":        "#6E9078",          # 跌：低饱和橄榄绿
         "flat":        "#757575",
-        "error":       "#C62828",
+        "error":       "#B0685A",
     },
     _THEME_DARK: {
         # 深色主题：低调柔和，不显眼，适合办公环境
@@ -136,8 +105,8 @@ _PALETTE = {
         "header_fg":   "#808080",          # 暗淡标题
         "hover":       "#2E2E2E",
         "separator":   "#333333",
-        "up":          "#6A9955",          # 柔和绿（涨），不刺眼
-        "down":        "#707070",          # 中灰（跌），非常低调
+        "up":          "#C07A6E",          # 涨：低饱和暖红
+        "down":        "#7AA088",          # 跌：低饱和青绿
         "flat":        "#606060",
         "error":       "#B07050",          # 柔和橙色
     },
@@ -214,7 +183,12 @@ class StockMenuWindow:
             if not rows:
                 self._add_text("  （暂无自选股）", c["flat"])
             else:
-                for row in rows:
+                # 成功的按涨跌幅降序，失败的放最后
+                ok_rows = sorted(
+                    (r for r in rows if r.ok),
+                    key=lambda r: r.pct, reverse=True)
+                fail_rows = [r for r in rows if not r.ok]
+                for row in ok_rows + fail_rows:
                     self._add_stock_row(row)
 
         self._add_separator()
@@ -418,11 +392,19 @@ class TrayIcon(Icon):
 
     默认行为：左键 → action，右键 → 原生 context menu。
     改为：左键/右键均触发 action，直接弹出自定义行情弹窗。
+
+    pystray 在 __init__ 中把 _on_notify 绑定方法存入 _message_handlers 字典，
+    窗口消息循环从字典中查找处理器。覆盖方法后必须同步更新字典，否则仍调用父类方法。
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # 更新消息处理器字典，指向子类的 _on_notify
+        self._message_handlers[0x040B] = self._on_notify  # WM_NOTIFY
+
     def _on_notify(self, wparam, lparam):
-        from pystray import _win32 as win32_mod
-        if lparam in (win32_mod.WM_LBUTTONUP, win32_mod.WM_RBUTTONUP):
+        # WM_LBUTTONUP=0x202(514), WM_RBUTTONUP=0x205(517)
+        if lparam in (0x0202, 0x0205):
             self()
 
 
@@ -526,9 +508,13 @@ class StockTrayApp:
         debug_log(f"=== StockTray 启动 build={BUILD} ===")
 
         # 托盘图标：左键/右键均直接弹出自定义行情弹窗
+        # pystray 要求 menu 含 default MenuItem 才能被 __call__ 触发
+        # TrayIcon 覆盖 _on_notify 使右键也走 __call__ 而非原生菜单
         self._icon = TrayIcon(
             APP_NAME, self._build_icon(), APP_TITLE,
-            action=self._on_icon_click)
+            menu=Menu(
+                MenuItem("Show", self._on_icon_click, default=True),
+            ))
         threading.Thread(target=self._icon.run, daemon=True).start()
         threading.Thread(target=self._refresh_loop, daemon=True).start()
         self._root.mainloop()

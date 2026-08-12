@@ -56,14 +56,6 @@ class QuoteRow:
     ok: bool = True
     error: str = ""
 
-    def to_dict(self):
-        """兼容旧接口的 dict 形式（供菜单等外部消费者使用）。"""
-        return {
-            "code": self.code, "name": self.name,
-            "price": self.price, "pct": self.pct,
-            "ok": self.ok, "error": self.error,
-        }
-
     @classmethod
     def fail(cls, code, error=""):
         return cls(code=code, name=code, ok=False, error=error)
@@ -150,8 +142,44 @@ class QuoteSource(ABC):
         return resp.text
 
     @staticmethod
+    def normalize_code(code):
+        """标准化股票代码为 sh/sz/bj 前缀格式（腾讯/新浪需要）。
+
+        已有前缀的直接返回，纯数字按首位判定市场：
+          6/9  → sh（沪市 A 股 / B 股 900xxx）
+          5    → sh（沪市 ETF/基金 5xxxxx，如 510300/513050/588000）
+          0/3  → sz（深市 A 股 / 创业板 30xxxx）
+          1    → sz（深市 ETF 159xxx）
+          2    → sz（深市 B 股 200xxx）
+          8/4  → bj（北交所）
+        """
+        c = code.strip().lower()
+        if c.startswith(("sh", "sz", "bj")):
+            return c
+        # 东方财富 secid 格式 (1.600519)
+        if c.count(".") == 1:
+            market, num = c.split(".", 1)
+            if market == "1":
+                return "sh" + num
+            if market == "0":
+                return "sz" + num
+        # 纯数字按首位判定
+        if c.isdigit():
+            if c[0] in ("6", "9", "5"):
+                return "sh" + c
+            if c[0] in ("0", "3", "1", "2"):
+                return "sz" + c
+            if c[0] in ("8", "4"):
+                return "bj" + c
+        return c
+
+    @staticmethod
     def resolve_secid(code):
-        """股票代码 → 东方财富 secid（仅 EastmoneySource 使用）。"""
+        """股票代码 → 东方财富 secid（仅 EastmoneySource 使用）。
+
+        东方财富市场编号：1=沪市，0=深市/北交所。
+        与 normalize_code 保持一致的市场判定。
+        """
         c = code.strip().lower()
         if c.count(".") == 1:
             market, num = c.split(".", 1)
@@ -164,9 +192,9 @@ class QuoteSource(ABC):
         if c.startswith("bj"):
             return "0." + c[2:]
         if c.isdigit():
-            if c[0] in ("6", "9"):
+            if c[0] in ("6", "9", "5"):          # 沪市 A/B 股 + ETF 5xxxxx
                 return "1." + c
-            if c[0] in ("0", "3"):
+            if c[0] in ("0", "3", "1", "2"):     # 深市 A 股/创业板 + ETF 159xxx + B 股
                 return "0." + c
             if c[0] in ("8", "4"):
                 return "0." + c
@@ -199,7 +227,10 @@ class TencentSource(QuoteSource):
 
     def fetch(self, codes, timeout=BG_TIMEOUT):
         self._init_http()
-        secs = ",".join(c.strip().lower() for c in codes)
+        # 标准化代码（纯数字 → sh/sz 前缀）→ 原始代码 的映射
+        # 结果字典以"原始代码"为键，与 QuoteFetcher.fetch 的查找键保持一致
+        norm_map = {self.normalize_code(c): c.strip().lower() for c in codes}
+        secs = ",".join(norm_map.keys())
         resp = self._session.get(
             self.URL + secs, headers=self._headers, timeout=timeout)
         debug_log(f"  {self.name} HTTP={resp.status_code} len={len(resp.content)}")
@@ -212,7 +243,10 @@ class TencentSource(QuoteSource):
             if "=" not in line or "v_" not in line:
                 continue
             var, _, val = line.partition("=")
-            code = var.replace("v_", "").strip().lower()
+            norm = var.replace("v_", "").strip().lower()
+            orig = norm_map.get(norm)
+            if orig is None:
+                continue
             val = val.strip().strip('"').strip("'")
             if not val:
                 continue
@@ -223,8 +257,8 @@ class TencentSource(QuoteSource):
             price = self.to_float(parts[3])
             if not self.valid_price(price):
                 continue
-            quotes[code] = QuoteRow(
-                code=code, name=name or code,
+            quotes[orig] = QuoteRow(
+                code=orig, name=name or orig,
                 price=price, pct=self.to_float(parts[32]))
         if not quotes:
             raise RuntimeError(f"{self.name}接口未返回任何有效数据")
@@ -242,7 +276,9 @@ class SinaSource(QuoteSource):
 
     def fetch(self, codes, timeout=BG_TIMEOUT):
         self._init_http()
-        secs = ",".join(c.strip().lower() for c in codes)
+        # 新浪接口需要带前缀的代码，否则返回鉴权失败
+        norm_map = {self.normalize_code(c): c.strip().lower() for c in codes}
+        secs = ",".join(norm_map.keys())
         headers = dict(self._headers, Referer="https://finance.sina.com.cn/")
         resp = self._session.get(
             self.URL + secs, headers=headers, timeout=timeout)
@@ -256,7 +292,10 @@ class SinaSource(QuoteSource):
             if "hq_str_" not in line or "=" not in line:
                 continue
             key, _, val = line.partition("=")
-            code = key.replace("var", "").replace("hq_str_", "").strip().lower()
+            norm = key.replace("var", "").replace("hq_str_", "").strip().lower()
+            orig = norm_map.get(norm)
+            if orig is None:
+                continue
             val = val.strip().strip('"').strip("'")
             if not val:
                 continue
@@ -270,8 +309,8 @@ class SinaSource(QuoteSource):
                 continue
             chg = price - prev_close if prev_close else 0.0
             pct = (chg / prev_close * 100.0) if prev_close else 0.0
-            quotes[code] = QuoteRow(
-                code=code, name=name or code, price=price, pct=pct)
+            quotes[orig] = QuoteRow(
+                code=orig, name=name or orig, price=price, pct=pct)
         if not quotes:
             raise RuntimeError(f"{self.name}接口未返回任何有效数据")
         return quotes
@@ -296,8 +335,10 @@ class EastmoneySource(QuoteSource):
             "ut": "b2884a393a59ad64002292a3e90d46a5",
             "_": "1",
         }
+        # 部分网络环境下 push2 会拒绝无 Referer 的请求，带上以提升可用性
+        headers = dict(self._headers, Referer="https://quote.eastmoney.com/")
         resp = self._session.get(
-            self.URL, params=params, headers=self._headers, timeout=timeout)
+            self.URL, params=params, headers=headers, timeout=timeout)
         debug_log(f"  {self.name} HTTP={resp.status_code} len={len(resp.content)}")
         resp.raise_for_status()
 
@@ -361,30 +402,10 @@ class QuoteFetcher:
     # ---- 公共属性 ----
 
     @property
-    def sources(self):
-        return list(self._sources)
-
-    @property
     def cache(self):
         """返回缓存快照的只读副本。"""
         with self._lock:
             return dict(self._cache)
-
-    @property
-    def last_success_time(self):
-        return self._last_success_time
-
-    # ---- 数据源管理 ----
-
-    def add_source(self, source: QuoteSource, priority: int = -1):
-        """注册新数据源。priority 默认追加到末尾（最低优先级）。"""
-        if isinstance(source, type):
-            source = source()
-        with self._lock:
-            if priority < 0:
-                self._sources.append(source)
-            else:
-                self._sources.insert(priority, source)
 
     # ---- 刷新判断 ----
 
@@ -484,10 +505,6 @@ class QuoteFetcher:
             with self._lock:
                 self._fetching = False
 
-    def try_refresh(self, codes_fn, timeout=MENU_TIMEOUT):
-        """非阻塞刷新：若已有线程在拉取则跳过，返回是否实际执行。"""
-        return self.refresh(codes_fn, timeout=timeout)
-
     def get_cached(self):
         """返回缓存快照 (rows, error)。"""
         with self._lock:
@@ -500,7 +517,7 @@ class QuoteFetcher:
         竞态保护：若已有线程在刷新则直接返回旧缓存。
         """
         if not skip_fetch and self.needs_refresh():
-            self.try_refresh(codes_fn, timeout=MENU_TIMEOUT)
+            self.refresh(codes_fn, timeout=MENU_TIMEOUT)
         return self.get_cached()
 
     # ---- 内部方法 ----

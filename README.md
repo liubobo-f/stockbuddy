@@ -46,5 +46,3 @@ python -m PyInstaller StockTray.spec --clean --noconfirm
 ```
 
 生成 `dist/StockTray.exe`，单文件无需 Python 环境。
-
-spec 已配置体积优化：排除未使用的标准库和第三方模块、启用 `optimize=1` 移除 docstring、启用 UPX 压缩。
