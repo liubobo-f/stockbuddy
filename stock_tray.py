@@ -18,19 +18,14 @@ import tkinter as tk
 from PIL import Image, ImageDraw
 from pystray import Icon, Menu, MenuItem
 
-from quote_fetcher import (
-    QuoteFetcher, TradingSchedule, QuoteRow,
-    debug_log, BG_TIMEOUT, MENU_TIMEOUT, CONFIG_DIR,
+from quote_fetcher import QuoteFetcher, TradingSchedule, QuoteRow, debug_log
+
+from config import (
+    APP_NAME, APP_TITLE, BUILD,
+    BG_TIMEOUT, MENU_TIMEOUT, CONFIG_DIR, BG_REFRESH_INTERVAL,
+    DEFAULT_STOCKS,
+    MENU_ITEM_WIDTH, MENU_PRICE_WIDTH, MENU_PCT_WIDTH,
 )
-
-APP_NAME = "StockTray"
-APP_TITLE = "自选股票"
-BUILD = "20260812.5"
-BG_REFRESH_INTERVAL = 30    # 交易时段后台刷新间隔（秒）
-
-# 菜单对齐参数（等宽字体下的显示宽度单元格数）
-_MENU_WIDTH = 32            # 菜单行总宽度
-_PRICE_PCT_WIDTH = 16       # 右侧价格+涨跌幅宽度
 
 
 # ============================================================================
@@ -43,15 +38,13 @@ class StockConfig:
     格式: 每行一个股票代码，支持 # 注释。
     """
 
-    DEFAULT_STOCKS = ["sh600519", "sz000858", "sh601318", "sz300750"]
-
     def __init__(self, config_dir=CONFIG_DIR):
         self.config_dir = config_dir
         self.path = os.path.join(config_dir, "stocks.csv")
         os.makedirs(config_dir, exist_ok=True)
         if not os.path.exists(self.path):
             with open(self.path, "w", encoding="utf-8") as f:
-                f.write("\n".join(self.DEFAULT_STOCKS) + "\n")
+                f.write("\n".join(DEFAULT_STOCKS) + "\n")
 
     def load(self):
         """读取自选股代码列表。"""
@@ -63,7 +56,7 @@ class StockConfig:
                     if line.strip() and not line.strip().startswith("#")
                 ]
         except Exception:
-            return list(self.DEFAULT_STOCKS)
+            return list(DEFAULT_STOCKS)
 
     def mtime(self):
         """配置文件修改时间（用于检测用户是否改过自选股）。"""
@@ -102,18 +95,25 @@ def _pad_right(text, target_width):
 
 
 def _format_quote_label(row: QuoteRow):
-    """格式化单只股票菜单项：名称左对齐，价格涨跌幅右对齐。
+    """格式化单只股票菜单项：名称左对齐，价格和涨跌幅分别右对齐。
 
-    示例：贵州茅台           1800.00  +1.50%
-          平安银行             12.34  -0.80%
+    价格右对齐 → 小数点纵向对齐；涨跌幅右对齐 → 百分号纵向对齐。
+
+    示例：贵州茅台    1800.00  +1.50%
+          平安银行      52.30  +0.80%
+          五粮液       158.70  -0.85%
     """
     arrow = "▲" if row.pct > 0 else ("▼" if row.pct < 0 else "—")
     sign = "+" if row.pct > 0 else ""
     price_str = f"{row.price:.2f}" if isinstance(row.price, (int, float)) else "-"
-    right = f"{price_str}  {arrow}{sign}{row.pct:.2f}%"
 
-    left = _pad_right(row.name, _MENU_WIDTH - _PRICE_PCT_WIDTH)
-    return f"{left}{right}"
+    # 价格右对齐（保证小数点纵向对齐）
+    price_col = f"{price_str:>{MENU_PRICE_WIDTH}}"
+    # 涨跌幅右对齐
+    pct_col = f"{arrow}{sign}{row.pct:.2f}%".rjust(MENU_PCT_WIDTH)
+
+    left = _pad_right(row.name, MENU_ITEM_WIDTH - MENU_PRICE_WIDTH - MENU_PCT_WIDTH)
+    return f"{left}{price_col}  {pct_col}"
 
 
 # ============================================================================

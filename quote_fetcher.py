@@ -15,19 +15,17 @@ import os
 import time
 import threading
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, date, timedelta
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# ----------------------------------------------------------------------------
-# 常量
-# ----------------------------------------------------------------------------
-BG_TIMEOUT = 5       # 后台刷新超时（秒）
-MENU_TIMEOUT = 3     # 菜单同步拉取超时（秒）
-CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "StockTray")
+from config import (
+    BG_TIMEOUT, MENU_TIMEOUT, CONFIG_DIR, CACHE_MAX_AGE,
+    TENCENT_URL, SINA_URL, EASTMONEY_URL, TRADING_SESSIONS,
+)
 
 # ----------------------------------------------------------------------------
 # 诊断日志
@@ -193,7 +191,7 @@ class QuoteSource(ABC):
 class TencentSource(QuoteSource):
     """腾讯 gtimg 行情：单次请求批量，最稳定。收盘后同样返回收盘价与涨跌幅。"""
 
-    URL = "https://qt.gtimg.cn/q="
+    URL = TENCENT_URL
 
     @property
     def name(self):
@@ -236,7 +234,7 @@ class TencentSource(QuoteSource):
 class SinaSource(QuoteSource):
     """新浪行情：需带 Referer，单次请求批量。"""
 
-    URL = "https://hq.sinajs.cn/list="
+    URL = SINA_URL
 
     @property
     def name(self):
@@ -282,7 +280,7 @@ class SinaSource(QuoteSource):
 class EastmoneySource(QuoteSource):
     """东方财富实时接口（兜底）：收盘后同样返回收盘价与当日涨跌幅。"""
 
-    URL = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+    URL = EASTMONEY_URL
 
     @property
     def name(self):
@@ -410,7 +408,7 @@ class QuoteFetcher:
             last_success = self._last_success_time
 
         if trading:
-            return (time.time() - cache_t) > 60
+            return (time.time() - cache_t) > CACHE_MAX_AGE
 
         last_open = TradingSchedule.today_last_open(now)
         if last_open is None:
@@ -524,11 +522,8 @@ class TradingSchedule:
     节假日不在此列，但非交易时段显示收盘价，不影响使用。
     """
 
-    # 每个交易日的两个时段（用分钟数表示）
-    _SESSIONS = [
-        (9 * 60 + 15, 11 * 60 + 35),    # 09:15 ~ 11:35
-        (13 * 60, 15 * 60 + 5),          # 13:00 ~ 15:05
-    ]
+    # 每个交易日的两个时段（分钟数表示），从 config 读取
+    _SESSIONS = TRADING_SESSIONS
 
     @classmethod
     def _open_times(cls, d: date):
