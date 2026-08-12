@@ -18,7 +18,7 @@ from datetime import datetime
 
 import tkinter as tk
 from PIL import Image, ImageDraw
-from pystray import Icon, Menu, MenuItem
+from pystray import Icon
 
 from quote_fetcher import QuoteFetcher, TradingSchedule, QuoteRow, debug_log
 
@@ -129,16 +129,17 @@ _PALETTE = {
         "error":       "#C62828",
     },
     _THEME_DARK: {
-        "bg":          "#202020",
-        "fg":          "#E8E8E8",
-        "header_bg":   "#2A2A2A",
-        "header_fg":   "#CCCCCC",
-        "hover":       "#383838",
-        "separator":   "#404040",
-        "up":          "#EF5350",
-        "down":        "#66BB6A",
-        "flat":        "#9E9E9E",
-        "error":       "#EF5350",
+        # 深色主题：低调柔和，不显眼，适合办公环境
+        "bg":          "#1E1E1E",
+        "fg":          "#B0B0B0",          # 柔和浅灰文字
+        "header_bg":   "#252525",
+        "header_fg":   "#808080",          # 暗淡标题
+        "hover":       "#2E2E2E",
+        "separator":   "#333333",
+        "up":          "#6A9955",          # 柔和绿（涨），不刺眼
+        "down":        "#707070",          # 中灰（跌），非常低调
+        "flat":        "#606060",
+        "error":       "#B07050",          # 柔和橙色
     },
 }
 
@@ -410,6 +411,22 @@ class StockMenuWindow:
 
 
 # ============================================================================
+# 自定义托盘图标（右键直接弹窗，无原生菜单）
+# ============================================================================
+class TrayIcon(Icon):
+    """覆盖 pystray 默认行为：右键点击也直接触发 action 回调。
+
+    默认行为：左键 → action，右键 → 原生 context menu。
+    改为：左键/右键均触发 action，直接弹出自定义行情弹窗。
+    """
+
+    def _on_notify(self, wparam, lparam):
+        from pystray import _win32 as win32_mod
+        if lparam in (win32_mod.WM_LBUTTONUP, win32_mod.WM_RBUTTONUP):
+            self()
+
+
+# ============================================================================
 # 托盘应用
 # ============================================================================
 class StockTrayApp:
@@ -439,14 +456,6 @@ class StockTrayApp:
                   fill=(255, 255, 255, 255), width=4, joint="curve")
         draw.ellipse([45, 18, 53, 26], fill=(255, 255, 255, 255))
         return img
-
-    # ---- 托盘菜单（右键） ----
-
-    def _build_tray_menu(self):
-        """构建最小化 pystray 右键菜单（触发弹窗）。"""
-        return Menu(
-            MenuItem("📈 自选股票", lambda: self._root.after(0, self._show_popup)),
-        )
 
     # ---- 弹窗菜单 ----
 
@@ -516,10 +525,9 @@ class StockTrayApp:
         self._root.withdraw()
         debug_log(f"=== StockTray 启动 build={BUILD} ===")
 
-        # 托盘图标：左键/右键均弹出自定义行情弹窗
-        self._icon = Icon(
+        # 托盘图标：左键/右键均直接弹出自定义行情弹窗
+        self._icon = TrayIcon(
             APP_NAME, self._build_icon(), APP_TITLE,
-            menu=self._build_tray_menu(),
             action=self._on_icon_click)
         threading.Thread(target=self._icon.run, daemon=True).start()
         threading.Thread(target=self._refresh_loop, daemon=True).start()
