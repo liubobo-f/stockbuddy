@@ -2,7 +2,8 @@
 """
 自选股票托盘小工具 (StockTray)
 ================================
-常驻 Windows 系统托盘，右键菜单展示自选股行情。
+常驻 Windows 系统托盘，自定义弹窗菜单展示自选股行情。
+菜单跟随系统深色/浅色主题，点击顶部时间行可刷新行情。
 
 行情数据由 QuoteFetcher 编排器提供（多源容灾，无需鉴权，运行时联网获取）。
 配置文件位置：%APPDATA%/StockTray/stocks.csv
@@ -12,11 +13,12 @@ import os
 import subprocess
 import threading
 import time
+import winreg
 from datetime import datetime
 
 import tkinter as tk
 from PIL import Image, ImageDraw
-from pystray import Icon, Menu, MenuItem
+from pystray import Icon
 
 from quote_fetcher import QuoteFetcher, TradingSchedule, QuoteRow, debug_log
 
@@ -78,10 +80,10 @@ class StockConfig:
 
 
 # ============================================================================
-# 菜单格式化
+# 菜单格式化（调试/测试用，弹窗菜单使用 tkinter grid 布局）
 # ============================================================================
 def _display_width(text):
-    """估算字符串在菜单中的显示宽度（CJK 字符约 2 格，ASCII 约 1 格）。"""
+    """估算字符串在等宽字体中的显示宽度（CJK 字符约 2 格，ASCII 约 1 格）。"""
     width = 0
     for char in text:
         width += 2 if ord(char) > 127 else 1
@@ -95,25 +97,316 @@ def _pad_right(text, target_width):
 
 
 def _format_quote_label(row: QuoteRow):
-    """格式化单只股票菜单项：名称左对齐，价格和涨跌幅分别右对齐。
-
-    价格右对齐 → 小数点纵向对齐；涨跌幅右对齐 → 百分号纵向对齐。
-
-    示例：贵州茅台    1800.00  +1.50%
-          平安银行      52.30  +0.80%
-          五粮液       158.70  -0.85%
-    """
+    """格式化单只股票菜单项文本：名称左对齐，价格和涨跌幅分别右对齐。"""
     arrow = "▲" if row.pct > 0 else ("▼" if row.pct < 0 else "—")
     sign = "+" if row.pct > 0 else ""
     price_str = f"{row.price:.2f}" if isinstance(row.price, (int, float)) else "-"
 
-    # 价格右对齐（保证小数点纵向对齐）
     price_col = f"{price_str:>{MENU_PRICE_WIDTH}}"
-    # 涨跌幅右对齐
     pct_col = f"{arrow}{sign}{row.pct:.2f}%".rjust(MENU_PCT_WIDTH)
 
     left = _pad_right(row.name, MENU_ITEM_WIDTH - MENU_PRICE_WIDTH - MENU_PCT_WIDTH)
     return f"{left}{price_col}  {pct_col}"
+
+
+# ============================================================================
+# 系统主题检测 + 配色方案
+# ============================================================================
+_THEME_LIGHT = "light"
+_THEME_DARK = "dark"
+
+_PALETTE = {
+    _THEME_LIGHT: {
+        "bg":          "#F0F0F0",
+        "fg":          "#1A1A1A",
+        "header_bg":   "#E4E4E4",
+        "header_fg":   "#333333",
+        "hover":       "#D8D8D8",
+        "separator":   "#D0D0D0",
+        "up":          "#C62828",
+        "down":        "#2E7D32",
+        "flat":        "#757575",
+        "error":       "#C62828",
+    },
+    _THEME_DARK: {
+        "bg":          "#202020",
+        "fg":          "#E8E8E8",
+        "header_bg":   "#2A2A2A",
+        "header_fg":   "#CCCCCC",
+        "hover":       "#383838",
+        "separator":   "#404040",
+        "up":          "#EF5350",
+        "down":        "#66BB6A",
+        "flat":        "#9E9E9E",
+        "error":       "#EF5350",
+    },
+}
+
+
+def _detect_theme():
+    """读取 Windows 注册表判断系统主题（深色/浅色）。"""
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        ) as key:
+            val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+            return _THEME_DARK if val == 0 else _THEME_LIGHT
+    except OSError:
+        return _THEME_LIGHT
+
+
+# ============================================================================
+# 自定义行情弹窗菜单
+# ============================================================================
+class StockMenuWindow:
+    """自定义行情弹窗：跟随系统深色/浅色主题，点击顶部刷新行情。
+
+    替代 pystray 原生菜单，使用 tkinter 顶层窗口实现，
+    支持主题自适应、小数点对齐、点击交互。
+    """
+
+    _FONT_FAMILY = "Microsoft YaHei UI"
+    _HEADER_SIZE = 10
+    _ITEM_SIZE = 9
+    _FOOTER_SIZE = 9
+    _PAD_X = 14
+    _PAD_Y = 8
+
+    def __init__(self, root, fetcher, config, icon):
+        self._root = root
+        self._fetcher = fetcher
+        self._config = config
+        self._icon = icon
+
+        self._theme = _detect_theme()
+        self._colors = _PALETTE[self._theme]
+        debug_log(f"弹窗主题: {self._theme}")
+
+        self._win = tk.Toplevel(root)
+        self._win.overrideredirect(True)
+        self._win.attributes("-topmost", True)
+        self._win.configure(bg=self._colors["bg"])
+
+        self._build()
+        self._position()
+
+        # 失去焦点时自动关闭
+        self._win.bind("<FocusOut>", self._on_focus_out)
+        self._win.bind("<Escape>", lambda e: self._destroy())
+
+    # ---- 构建界面 ----
+
+    def _build(self):
+        c = self._colors
+        rows, error = self._fetcher.get_for_menu(self._config.load)
+
+        # 顶部标题行（可点击刷新）
+        self._build_header()
+        self._add_separator()
+
+        if error:
+            self._add_text(f"  ⚠ 行情获取失败：{error}", c["error"])
+        elif rows is None:
+            self._add_text("  行情加载中…", c["flat"])
+        else:
+            if not rows:
+                self._add_text("  （暂无自选股）", c["flat"])
+            else:
+                for row in rows:
+                    self._add_stock_row(row)
+
+        self._add_separator()
+        self._build_footer()
+
+    def _build_header(self):
+        c = self._colors
+        cache = self._fetcher.cache
+        update_time = cache["time"]
+        is_trading = cache["trading"]
+        time_str = (time.strftime("%H:%M:%S", time.localtime(update_time))
+                    if update_time else "--:--:--")
+        label = "收盘" if not is_trading else "行情"
+
+        header = tk.Frame(self._win, bg=c["header_bg"], cursor="hand2")
+        header.pack(fill="x", padx=1, pady=(1, 0))
+
+        tk.Label(
+            header,
+            text=f"  📈 自选股票{label}",
+            bg=c["header_bg"], fg=c["header_fg"],
+            font=(self._FONT_FAMILY, self._HEADER_SIZE),
+            anchor="w",
+        ).pack(side="left", padx=self._PAD_X, pady=self._PAD_Y)
+
+        tk.Label(
+            header,
+            text=f"更新 {time_str}  🔄  ",
+            bg=c["header_bg"], fg=c["header_fg"],
+            font=(self._FONT_FAMILY, self._HEADER_SIZE - 1),
+            anchor="e",
+        ).pack(side="right", padx=self._PAD_X, pady=self._PAD_Y)
+
+        header.bind("<Button-1>", lambda e: self._do_refresh())
+        for child in header.winfo_children():
+            child.bind("<Button-1>", lambda e: self._do_refresh())
+
+        # hover 效果
+        def _hover_on(e):
+            header.configure(bg=c["hover"])
+            for w in header.winfo_children():
+                w.configure(bg=c["hover"])
+
+        def _hover_off(e):
+            header.configure(bg=c["header_bg"])
+            for w in header.winfo_children():
+                w.configure(bg=c["header_bg"])
+
+        header.bind("<Enter>", _hover_on)
+        header.bind("<Leave>", _hover_off)
+        for child in header.winfo_children():
+            child.bind("<Enter>", _hover_on)
+            child.bind("<Leave>", _hover_off)
+
+    def _build_footer(self):
+        c = self._colors
+        self._add_clickable("  ⚙ 修改自选股", c["fg"], self._do_edit)
+        self._add_clickable("  ✕ 退出", c["fg"], self._do_exit)
+
+    def _add_stock_row(self, row: QuoteRow):
+        c = self._colors
+
+        if not row.ok:
+            self._add_text(f"  {row.name}   ❌ {row.error[:60]}", c["error"])
+            return
+
+        arrow = "▲" if row.pct > 0 else ("▼" if row.pct < 0 else "—")
+        sign = "+" if row.pct > 0 else ""
+        pct_color = (c["up"] if row.pct > 0
+                     else c["down"] if row.pct < 0 else c["flat"])
+        price_str = (f"{row.price:.2f}"
+                     if isinstance(row.price, (int, float)) else "-")
+
+        frame = tk.Frame(self._win, bg=c["bg"])
+        frame.pack(fill="x", padx=1)
+
+        # 名称（左对齐）
+        tk.Label(
+            frame, text=row.name,
+            bg=c["bg"], fg=c["fg"],
+            font=(self._FONT_FAMILY, self._ITEM_SIZE),
+            anchor="w",
+        ).pack(side="left", padx=(self._PAD_X, 4), pady=3)
+
+        # 涨跌幅（右对齐，带颜色）
+        tk.Label(
+            frame, text=f"{arrow}{sign}{row.pct:.2f}%",
+            bg=c["bg"], fg=pct_color,
+            font=(self._FONT_FAMILY, self._ITEM_SIZE),
+            anchor="e", width=8,
+        ).pack(side="right", padx=(2, self._PAD_X), pady=3)
+
+        # 价格（右对齐，小数点对齐）
+        tk.Label(
+            frame, text=price_str,
+            bg=c["bg"], fg=c["fg"],
+            font=(self._FONT_FAMILY, self._ITEM_SIZE),
+            anchor="e", width=8,
+        ).pack(side="right", pady=3)
+
+        # hover 效果
+        def _hover_on(e):
+            frame.configure(bg=c["hover"])
+            for w in frame.winfo_children():
+                w.configure(bg=c["hover"])
+
+        def _hover_off(e):
+            frame.configure(bg=c["bg"])
+            for w in frame.winfo_children():
+                w.configure(bg=c["bg"])
+
+        frame.bind("<Enter>", _hover_on)
+        frame.bind("<Leave>", _hover_off)
+        for child in frame.winfo_children():
+            child.bind("<Enter>", _hover_on)
+            child.bind("<Leave>", _hover_off)
+
+    def _add_separator(self):
+        sep = tk.Frame(self._win, height=1, bg=self._colors["separator"])
+        sep.pack(fill="x", padx=4, pady=3)
+
+    def _add_text(self, text, color):
+        tk.Label(
+            self._win, text=text,
+            bg=self._colors["bg"], fg=color,
+            font=(self._FONT_FAMILY, self._ITEM_SIZE),
+            anchor="w",
+        ).pack(fill="x", padx=self._PAD_X, pady=3)
+
+    def _add_clickable(self, text, color, callback):
+        label = tk.Label(
+            self._win, text=text,
+            bg=self._colors["bg"], fg=color,
+            font=(self._FONT_FAMILY, self._FOOTER_SIZE),
+            anchor="w", cursor="hand2",
+        )
+        label.pack(fill="x", padx=self._PAD_X, pady=4)
+        label.bind("<Button-1>", lambda e: callback())
+
+        def _hover_on(e):
+            label.configure(bg=self._colors["hover"])
+
+        def _hover_off(e):
+            label.configure(bg=self._colors["bg"])
+
+        label.bind("<Enter>", _hover_on)
+        label.bind("<Leave>", _hover_off)
+
+    # ---- 窗口定位 ----
+
+    def _position(self):
+        """定位在屏幕右下角（靠近系统托盘）。"""
+        self._win.update_idletasks()
+        w = self._win.winfo_width()
+        h = self._win.winfo_height()
+
+        screen_w = self._win.winfo_screenwidth()
+        screen_h = self._win.winfo_screenheight()
+
+        x = max(0, screen_w - w - 20)
+        y = max(0, screen_h - h - 60)
+        self._win.geometry(f"+{x}+{y}")
+
+    # ---- 事件处理 ----
+
+    def _on_focus_out(self, event):
+        if event.widget == self._win:
+            self._destroy()
+
+    def _do_refresh(self):
+        """点击顶部：关闭弹窗，后台刷新行情。"""
+        self._destroy()
+
+        def _refresh():
+            self._fetcher.refresh(self._config.load, timeout=MENU_TIMEOUT)
+        threading.Thread(target=_refresh, daemon=True).start()
+
+    def _do_edit(self):
+        self._destroy()
+        self._config.open_in_editor()
+
+    def _do_exit(self):
+        self._destroy()
+        self._icon.stop()
+        self._root.after(0, self._root.quit)
+
+    def _destroy(self):
+        try:
+            if self._win and self._win.winfo_exists():
+                self._win.destroy()
+        except Exception:
+            pass
+        self._win = None
 
 
 # ============================================================================
@@ -123,7 +416,7 @@ class StockTrayApp:
     """系统托盘行情应用。
 
     集成 QuoteFetcher（行情编排器）+ StockConfig（配置管理），
-    通过 pystray 在系统托盘展示行情菜单。
+    通过 pystray 托盘图标 + 自定义 tkinter 弹窗展示行情菜单。
     """
 
     def __init__(self):
@@ -131,6 +424,7 @@ class StockTrayApp:
         self._fetcher = QuoteFetcher()
         self._icon: Icon | None = None
         self._root: tk.Tk | None = None
+        self._popup: StockMenuWindow | None = None
         self._menu_event = threading.Event()
 
     # ---- 托盘图标 ----
@@ -146,59 +440,26 @@ class StockTrayApp:
         draw.ellipse([45, 18, 53, 26], fill=(255, 255, 255, 255))
         return img
 
-    # ---- 菜单构建 ----
+    # ---- 弹窗菜单 ----
 
-    def _build_menu(self, skip_fetch=False):
-        rows, error = self._fetcher.get_for_menu(
-            self._config.load, skip_fetch=skip_fetch)
-        items = []
-
-        if error:
-            items.append(MenuItem(f"行情获取失败：{error}", None, enabled=False))
-        elif rows is None:
-            items.append(MenuItem("行情加载中…", None, enabled=False))
-        else:
-            cache = self._fetcher.cache
-            update_time = cache["time"]
-            is_trading = cache["trading"]
-            time_str = (time.strftime("%H:%M:%S", time.localtime(update_time))
-                        if update_time else "--:--:--")
-            label = "收盘" if not is_trading else "行情"
-            items.append(MenuItem(
-                f"📈 自选股票{label}  (更新 {time_str})",
-                None, enabled=False))
-            items.append(Menu.SEPARATOR)
-
-            if not rows:
-                items.append(MenuItem(
-                    "（暂无自选股，请『修改自选股』）", None, enabled=False))
-            else:
-                for row in rows:
-                    if not row.ok:
-                        text = f"{row.name}   ❌ {row.error[:60]}"
-                        items.append(MenuItem(text, None, enabled=False))
-                    else:
-                        items.append(MenuItem(
-                            _format_quote_label(row), None, enabled=False))
-
-        items.append(Menu.SEPARATOR)
-        # 仅交易时段显示刷新按钮
-        if self._fetcher.cache["trading"]:
-            items.append(MenuItem("🔄 刷新行情", self._on_refresh, default=True))
-        items.append(MenuItem("⚙ 修改自选股", self._on_edit))
-        items.append(Menu.SEPARATOR)
-        items.append(MenuItem("退出", self._on_exit))
-        return Menu(*items)
-
-    def _rebuild_menu(self):
-        """重建菜单（异常静默，避免后台线程出错导致崩溃）。"""
-        if self._icon is None:
+    def _show_popup(self):
+        """显示行情弹窗（若已打开则关闭）。"""
+        if self._popup and self._popup._win:
+            self._popup._destroy()
+            self._popup = None
             return
-        try:
-            self._icon.menu = self._build_menu()
-            self._icon.update_menu()
-        except Exception:
-            pass
+
+        self._popup = StockMenuWindow(
+            self._root, self._fetcher, self._config, self._icon)
+        self._popup._win.focus_force()
+
+    def _rebuild_popup(self):
+        """后台刷新后重建弹窗（仅弹窗打开时生效）。"""
+        if self._popup and self._popup._win:
+            self._popup._destroy()
+            self._popup = StockMenuWindow(
+                self._root, self._fetcher, self._config, self._icon)
+            self._popup._win.focus_force()
 
     # ---- 后台刷新 ----
 
@@ -223,7 +484,7 @@ class StockTrayApp:
                         or config_changed
                         or self._fetcher.needs_refresh(now)):
                     self._fetcher.refresh(self._config.load, timeout=BG_TIMEOUT)
-                    self._rebuild_menu()
+                    self._rebuild_popup()
                 first_run = False
 
                 if is_trading:
@@ -239,20 +500,6 @@ class StockTrayApp:
                 self._menu_event.wait(BG_REFRESH_INTERVAL)
                 self._menu_event.clear()
 
-    # ---- 菜单回调 ----
-
-    def _on_refresh(self, icon, item):
-        """手动刷新：强制拉取最新行情。"""
-        self._fetcher.refresh(self._config.load, timeout=MENU_TIMEOUT)
-        self._rebuild_menu()
-
-    def _on_edit(self, icon, item):
-        self._config.open_in_editor()
-
-    def _on_exit(self, icon, item):
-        icon.stop()
-        self._root.after(0, self._root.quit)
-
     # ---- 入口 ----
 
     def run(self):
@@ -261,12 +508,17 @@ class StockTrayApp:
         self._root.withdraw()
         debug_log(f"=== StockTray 启动 build={BUILD} ===")
 
+        # 托盘图标：点击弹出/关闭自定义行情弹窗
         self._icon = Icon(
             APP_NAME, self._build_icon(), APP_TITLE,
-            menu=self._build_menu(skip_fetch=True))
+            action=self._on_icon_click)
         threading.Thread(target=self._icon.run, daemon=True).start()
         threading.Thread(target=self._refresh_loop, daemon=True).start()
         self._root.mainloop()
+
+    def _on_icon_click(self, icon):
+        """托盘图标点击：弹出/关闭行情菜单。"""
+        self._root.after(0, self._show_popup)
 
 
 # ============================================================================
