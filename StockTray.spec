@@ -21,7 +21,7 @@ a = Analysis(
         'xml', 'multiprocessing', 'concurrent.futures',
         'curses', 'lib2to3', 'ensurepip',
         'pdb', 'pickletools', 'difflib',
-        # Pillow（已改用 .ico 文件加载图标）
+        # Pillow（使用静态 .ico 图标，无需运行时依赖）
         'PIL', 'PIL.Image', 'PIL.ImageDraw',
         # 未使用的第三方依赖
         'matplotlib', 'numpy', 'scipy', 'pandas',

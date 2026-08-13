@@ -158,6 +158,9 @@ class StockMenuWindow:
         self._win.attributes("-topmost", True)
         self._win.configure(bg=self._colors["bg"])
 
+        # 先定位到屏幕外，避免定位前闪现
+        self._win.geometry("+-10000+-10000")
+
         self._build()
         self._position()
 
@@ -341,7 +344,8 @@ class StockMenuWindow:
 
     def _position(self):
         """定位在屏幕右下角（靠近系统托盘）。"""
-        self._win.update_idletasks()
+        # 使用 update() 而非 update_idletasks() 确保窗口尺寸计算正确
+        self._win.update()
         w = self._win.winfo_width()
         h = self._win.winfo_height()
 
@@ -388,16 +392,10 @@ class StockMenuWindow:
 # 自定义托盘图标（右键直接弹窗，无原生菜单）
 # ============================================================================
 class TrayIcon(Icon):
-    """覆盖 pystray 默认行为：右键点击也直接触发 action 回调。
+    """自定义托盘图标：左键/右键均直接弹出行情弹窗。
 
-    默认行为：左键 → action，右键 → 原生 context menu。
-    改为：左键/右键均触发 action，直接弹出自定义行情弹窗。
-
-    pystray 在 __init__ 中把 _on_notify 绑定方法存入 _message_handlers 字典，
-    窗口消息循环从字典中查找处理器。覆盖方法后必须同步更新字典，否则仍调用父类方法。
-
-    同时覆盖 _assert_icon_handle，直接从 .ico 文件加载图标，
-    绕过 pystray 默认的 PIL serialized_image 流程，彻底去除 Pillow 依赖。
+    覆盖 pystray 默认行为（左键 action，右键 context menu），
+    使左右键均触发 action 回调。
     """
 
     def __init__(self, *args, icon_path=None, **kwargs):
@@ -412,7 +410,7 @@ class TrayIcon(Icon):
             self()
 
     def _assert_icon_handle(self):
-        """直接从 .ico 文件加载图标，不依赖 PIL。"""
+        """从 .ico 文件加载图标。"""
         if self._icon_handle:
             return
         from pystray._util import win32
@@ -525,13 +523,8 @@ class StockTrayApp:
         debug_log(f"=== StockTray 启动 build={BUILD} ===")
 
         icon_path = self._build_icon()
-
-        # 托盘图标：左键/右键均直接弹出自定义行情弹窗
-        # pystray 要求 menu 含 default MenuItem 才能被 __call__ 触发
-        # TrayIcon 覆盖 _on_notify 使右键也走 __call__ 而非原生菜单
-        # 注意：icon 参数不能为 None，否则 pystray 会认为没有图标而不显示
         self._icon = TrayIcon(
-            APP_NAME, icon_path, APP_TITLE,  # 传 icon_path 作为占位符
+            APP_NAME, icon_path, APP_TITLE,
             icon_path=icon_path,
             menu=Menu(
                 MenuItem("Show", self._on_icon_click, default=True),
