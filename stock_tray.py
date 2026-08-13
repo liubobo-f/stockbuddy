@@ -387,15 +387,9 @@ class TrayIcon(Icon):
         if self._icon_handle:
             return
         from pystray._util import win32
-        if self._icon_path and os.path.isfile(self._icon_path):
-            self._icon_handle = win32.LoadImage(
-                None, self._icon_path, win32.IMAGE_ICON,
-                0, 0, win32.LR_DEFAULTSIZE | win32.LR_LOADFROMFILE)
-        else:
-            # 无 .ico 文件时回退到系统默认图标 (IDI_APPLICATION=32512)
-            self._icon_handle = win32.LoadImage(
-                None, 32512, win32.IMAGE_ICON,
-                0, 0, win32.LR_DEFAULTSIZE | win32.LR_SHARED)
+        self._icon_handle = win32.LoadImage(
+            None, self._icon_path, win32.IMAGE_ICON,
+            0, 0, win32.LR_DEFAULTSIZE | win32.LR_LOADFROMFILE)
 
 
 # ============================================================================
