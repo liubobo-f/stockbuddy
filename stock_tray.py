@@ -26,6 +26,11 @@ from config import (
     APP_NAME, APP_TITLE, BUILD,
     BG_TIMEOUT, MENU_TIMEOUT, CONFIG_DIR, BG_REFRESH_INTERVAL,
     DEFAULT_STOCKS,
+    UI_FONT_FAMILY, UI_HEADER_SIZE, UI_ITEM_SIZE, UI_FOOTER_SIZE,
+    UI_PAD_X, UI_PAD_Y, UI_LABEL_WIDTH,
+    UI_WINDOW_MARGIN_X, UI_WINDOW_MARGIN_Y,
+    WM_NOTIFY, WM_LBUTTONUP, WM_RBUTTONUP,
+    THEME_LIGHT, THEME_DARK, COLOR_PALETTE,
 )
 
 
@@ -75,44 +80,12 @@ class StockConfig:
             if hasattr(os, "startfile"):
                 os.startfile(abs_path, "open")
             else:
-                os.system(f'notepad "{abs_path}"')
+                subprocess.Popen(["notepad", abs_path])
 
 
 # ============================================================================
-# 系统主题检测 + 配色方案
+# 系统主题检测
 # ============================================================================
-_THEME_LIGHT = "light"
-_THEME_DARK = "dark"
-
-_PALETTE = {
-    _THEME_LIGHT: {
-        "bg":          "#F0F0F0",
-        "fg":          "#1A1A1A",
-        "header_bg":   "#E4E4E4",
-        "header_fg":   "#333333",
-        "hover":       "#D8D8D8",
-        "separator":   "#D0D0D0",
-        "up":          "#B0685A",          # 涨：低饱和砖红
-        "down":        "#6E9078",          # 跌：低饱和橄榄绿
-        "flat":        "#757575",
-        "error":       "#B0685A",
-    },
-    _THEME_DARK: {
-        # 深色主题：低调柔和，不显眼，适合办公环境
-        "bg":          "#1E1E1E",
-        "fg":          "#B0B0B0",          # 柔和浅灰文字
-        "header_bg":   "#252525",
-        "header_fg":   "#808080",          # 暗淡标题
-        "hover":       "#2E2E2E",
-        "separator":   "#333333",
-        "up":          "#C07A6E",          # 涨：低饱和暖红
-        "down":        "#7AA088",          # 跌：低饱和青绿
-        "flat":        "#606060",
-        "error":       "#B07050",          # 柔和橙色
-    },
-}
-
-
 def _detect_theme():
     """读取 Windows 注册表判断系统主题（深色/浅色）。"""
     try:
@@ -136,13 +109,6 @@ class StockMenuWindow:
     支持主题自适应、小数点对齐、点击交互。
     """
 
-    _FONT_FAMILY = "Microsoft YaHei UI"
-    _HEADER_SIZE = 10
-    _ITEM_SIZE = 9
-    _FOOTER_SIZE = 9
-    _PAD_X = 14
-    _PAD_Y = 8
-
     def __init__(self, root, fetcher, config, icon):
         self._root = root
         self._fetcher = fetcher
@@ -150,7 +116,7 @@ class StockMenuWindow:
         self._icon = icon
 
         self._theme = _detect_theme()
-        self._colors = _PALETTE[self._theme]
+        self._colors = COLOR_PALETTE[self._theme]
         debug_log(f"弹窗主题: {self._theme}")
 
         self._win = tk.Toplevel(root)
@@ -213,17 +179,17 @@ class StockMenuWindow:
             header,
             text=f"  📈 自选股票{label}",
             bg=c["header_bg"], fg=c["header_fg"],
-            font=(self._FONT_FAMILY, self._HEADER_SIZE),
+            font=(UI_FONT_FAMILY, UI_HEADER_SIZE),
             anchor="w",
-        ).pack(side="left", padx=self._PAD_X, pady=self._PAD_Y)
+        ).pack(side="left", padx=UI_PAD_X, pady=UI_PAD_Y)
 
         tk.Label(
             header,
             text=f"更新 {time_str}  🔄  ",
             bg=c["header_bg"], fg=c["header_fg"],
-            font=(self._FONT_FAMILY, self._HEADER_SIZE - 1),
+            font=(UI_FONT_FAMILY, UI_HEADER_SIZE - 1),
             anchor="e",
-        ).pack(side="right", padx=self._PAD_X, pady=self._PAD_Y)
+        ).pack(side="right", padx=UI_PAD_X, pady=UI_PAD_Y)
 
         header.bind("<Button-1>", lambda e: self._do_refresh())
         for child in header.winfo_children():
@@ -272,24 +238,24 @@ class StockMenuWindow:
         tk.Label(
             frame, text=row.name,
             bg=c["bg"], fg=c["fg"],
-            font=(self._FONT_FAMILY, self._ITEM_SIZE),
+            font=(UI_FONT_FAMILY, UI_ITEM_SIZE),
             anchor="w",
-        ).pack(side="left", padx=(self._PAD_X, 4), pady=3)
+        ).pack(side="left", padx=(UI_PAD_X, 4), pady=3)
 
         # 涨跌幅（右对齐，带颜色）
         tk.Label(
             frame, text=f"{arrow}{sign}{row.pct:.2f}%",
             bg=c["bg"], fg=pct_color,
-            font=(self._FONT_FAMILY, self._ITEM_SIZE),
-            anchor="e", width=8,
-        ).pack(side="right", padx=(2, self._PAD_X), pady=3)
+            font=(UI_FONT_FAMILY, UI_ITEM_SIZE),
+            anchor="e", width=UI_LABEL_WIDTH,
+        ).pack(side="right", padx=(2, UI_PAD_X), pady=3)
 
         # 价格（右对齐，小数点对齐）
         tk.Label(
             frame, text=price_str,
             bg=c["bg"], fg=c["fg"],
-            font=(self._FONT_FAMILY, self._ITEM_SIZE),
-            anchor="e", width=8,
+            font=(UI_FONT_FAMILY, UI_ITEM_SIZE),
+            anchor="e", width=UI_LABEL_WIDTH,
         ).pack(side="right", pady=3)
 
         # hover 效果
@@ -317,18 +283,18 @@ class StockMenuWindow:
         tk.Label(
             self._win, text=text,
             bg=self._colors["bg"], fg=color,
-            font=(self._FONT_FAMILY, self._ITEM_SIZE),
+            font=(UI_FONT_FAMILY, UI_ITEM_SIZE),
             anchor="w",
-        ).pack(fill="x", padx=self._PAD_X, pady=3)
+        ).pack(fill="x", padx=UI_PAD_X, pady=3)
 
     def _add_clickable(self, text, color, callback):
         label = tk.Label(
             self._win, text=text,
             bg=self._colors["bg"], fg=color,
-            font=(self._FONT_FAMILY, self._FOOTER_SIZE),
+            font=(UI_FONT_FAMILY, UI_FOOTER_SIZE),
             anchor="w", cursor="hand2",
         )
-        label.pack(fill="x", padx=self._PAD_X, pady=4)
+        label.pack(fill="x", padx=UI_PAD_X, pady=4)
         label.bind("<Button-1>", lambda e: callback())
 
         def _hover_on(e):
@@ -352,8 +318,8 @@ class StockMenuWindow:
         screen_w = self._win.winfo_screenwidth()
         screen_h = self._win.winfo_screenheight()
 
-        x = max(0, screen_w - w - 20)
-        y = max(0, screen_h - h - 60)
+        x = max(0, screen_w - w - UI_WINDOW_MARGIN_X)
+        y = max(0, screen_h - h - UI_WINDOW_MARGIN_Y)
         self._win.geometry(f"+{x}+{y}")
 
     # ---- 事件处理 ----
@@ -402,11 +368,11 @@ class TrayIcon(Icon):
         super().__init__(*args, **kwargs)
         self._icon_path = icon_path
         # 更新消息处理器字典，指向子类的 _on_notify
-        self._message_handlers[0x040B] = self._on_notify  # WM_NOTIFY
+        self._message_handlers[WM_NOTIFY] = self._on_notify
 
     def _on_notify(self, wparam, lparam):
-        # WM_LBUTTONUP=0x202(514), WM_RBUTTONUP=0x205(517)
-        if lparam in (0x0202, 0x0205):
+        # WM_LBUTTONUP, WM_RBUTTONUP
+        if lparam in (WM_LBUTTONUP, WM_RBUTTONUP):
             self()
 
     def _assert_icon_handle(self):

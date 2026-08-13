@@ -13,7 +13,7 @@ import os
 # ============================================================================
 APP_NAME = "StockTray"
 APP_TITLE = "自选股票"
-BUILD = "20260812.6"
+BUILD = "20260812.7"
 
 # ============================================================================
 # 路径
@@ -29,6 +29,39 @@ SINA_URL = "https://hq.sinajs.cn/list="
 EASTMONEY_URL = "https://push2.eastmoney.com/api/qt/ulist.np/get"
 
 # ============================================================================
+# HTTP 请求配置
+# ============================================================================
+# 通用请求头
+HTTP_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+HTTP_HEADERS = {
+    "User-Agent": HTTP_USER_AGENT,
+    "Accept": "*/*",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+    "Connection": "keep-alive",
+}
+
+# 重试策略
+HTTP_RETRY_TOTAL = 1
+HTTP_RETRY_BACKOFF = 0.3
+HTTP_RETRY_STATUS_FORCELIST = [500, 502, 503, 504]
+
+# 连接池配置
+HTTP_POOL_CONNECTIONS = 5
+HTTP_POOL_MAXSIZE = 10
+
+# 各数据源特定请求头 (Referer)
+SINA_REFERER = "https://finance.sina.com.cn/"
+EASTMONEY_REFERER = "https://quote.eastmoney.com/"
+
+# 东方财富接口特定参数
+EASTMONEY_UT = "b2884a393a59ad64002292a3e90d46a5"
+EASTMONEY_FIELDS = "f12,f13,f14,f2,f3,f4,f6"
+
+# ============================================================================
 # 网络 / 超时
 # ============================================================================
 BG_TIMEOUT = 5          # 后台刷新超时（秒）
@@ -39,6 +72,60 @@ MENU_TIMEOUT = 3        # 菜单同步拉取超时（秒）
 # ============================================================================
 CACHE_MAX_AGE = 60      # 交易时段缓存最大有效秒数（超过则重新拉取）
 BG_REFRESH_INTERVAL = 30  # 交易时段后台刷新间隔（秒）
+
+# ============================================================================
+# UI 样式配置
+# ============================================================================
+# 字体与字号
+UI_FONT_FAMILY = "Microsoft YaHei UI"
+UI_HEADER_SIZE = 10
+UI_ITEM_SIZE = 9
+UI_FOOTER_SIZE = 9
+
+# 间距与布局
+UI_PAD_X = 14
+UI_PAD_Y = 8
+UI_LABEL_WIDTH = 8          # 价格/涨跌幅 Label 对齐宽度
+UI_WINDOW_MARGIN_X = 20     # 窗口距屏幕右边距
+UI_WINDOW_MARGIN_Y = 60     # 窗口距屏幕下边距
+
+# 系统托盘事件消息
+WM_NOTIFY = 0x040B
+WM_LBUTTONUP = 0x0202
+WM_RBUTTONUP = 0x0205
+
+# ============================================================================
+# 配色方案
+# ============================================================================
+THEME_LIGHT = "light"
+THEME_DARK = "dark"
+
+COLOR_PALETTE = {
+    THEME_LIGHT: {
+        "bg":          "#F0F0F0",
+        "fg":          "#1A1A1A",
+        "header_bg":   "#E4E4E4",
+        "header_fg":   "#333333",
+        "hover":       "#D8D8D8",
+        "separator":   "#D0D0D0",
+        "up":          "#B0685A",          # 涨：低饱和砖红
+        "down":        "#6E9078",          # 跌：低饱和橄榄绿
+        "flat":        "#757575",
+        "error":       "#B0685A",
+    },
+    THEME_DARK: {
+        "bg":          "#1E1E1E",
+        "fg":          "#B0B0B0",          # 柔和浅灰文字
+        "header_bg":   "#252525",
+        "header_fg":   "#808080",          # 暗淡标题
+        "hover":       "#2E2E2E",
+        "separator":   "#333333",
+        "up":          "#C07A6E",          # 涨：低饱和暖红
+        "down":        "#7AA088",          # 跌：低饱和青绿
+        "flat":        "#606060",
+        "error":       "#B07050",          # 柔和橙色
+    },
+}
 
 # ============================================================================
 # 默认自选股（首次运行时写入 stocks.csv）
@@ -57,3 +144,4 @@ TRADING_SESSIONS = [
     (9 * 60 + 15, 11 * 60 + 35),    # 上午 09:15 ~ 11:35
     (13 * 60, 15 * 60 + 5),          # 下午 13:00 ~ 15:05
 ]
+

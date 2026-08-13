@@ -25,6 +25,9 @@ from urllib3.util.retry import Retry
 from config import (
     BG_TIMEOUT, MENU_TIMEOUT, CONFIG_DIR, CACHE_MAX_AGE,
     TENCENT_URL, SINA_URL, EASTMONEY_URL, TRADING_SESSIONS,
+    HTTP_HEADERS, HTTP_RETRY_TOTAL, HTTP_RETRY_BACKOFF,
+    HTTP_RETRY_STATUS_FORCELIST, HTTP_POOL_CONNECTIONS, HTTP_POOL_MAXSIZE,
+    SINA_REFERER, EASTMONEY_REFERER, EASTMONEY_UT, EASTMONEY_FIELDS,
 )
 
 # ----------------------------------------------------------------------------
@@ -84,22 +87,15 @@ class QuoteSource(ABC):
         """懒初始化 HTTP 会话与请求头（首次使用时创建）。"""
         if cls._session is None:
             s = requests.Session()
-            retry = Retry(total=1, backoff_factor=0.3,
-                          status_forcelist=[500, 502, 503, 504])
+            retry = Retry(total=HTTP_RETRY_TOTAL, backoff_factor=HTTP_RETRY_BACKOFF,
+                          status_forcelist=HTTP_RETRY_STATUS_FORCELIST)
             adapter = HTTPAdapter(
-                max_retries=retry, pool_connections=5, pool_maxsize=10)
+                max_retries=retry, pool_connections=HTTP_POOL_CONNECTIONS,
+                pool_maxsize=HTTP_POOL_MAXSIZE)
             s.mount("https://", adapter)
             s.mount("http://", adapter)
             cls._session = s
-            cls._headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"),
-                "Accept": "*/*",
-                "Accept-Language": "zh-CN,zh;q=0.9",
-                "Connection": "keep-alive",
-            }
+            cls._headers = dict(HTTP_HEADERS)
 
     # ---- 通用工具方法 ----
 
@@ -279,7 +275,7 @@ class SinaSource(QuoteSource):
         # 新浪接口需要带前缀的代码，否则返回鉴权失败
         norm_map = {self.normalize_code(c): c.strip().lower() for c in codes}
         secs = ",".join(norm_map.keys())
-        headers = dict(self._headers, Referer="https://finance.sina.com.cn/")
+        headers = dict(self._headers, Referer=SINA_REFERER)
         resp = self._session.get(
             self.URL + secs, headers=headers, timeout=timeout)
         debug_log(f"  {self.name} HTTP={resp.status_code} len={len(resp.content)}")
@@ -330,13 +326,13 @@ class EastmoneySource(QuoteSource):
         secids = ",".join(self.resolve_secid(c) for c in codes)
         params = {
             "pn": "1", "pz": str(len(codes)), "fltt": "2",
-            "fields": "f12,f13,f14,f2,f3,f4,f6",
+            "fields": EASTMONEY_FIELDS,
             "secids": secids,
-            "ut": "b2884a393a59ad64002292a3e90d46a5",
+            "ut": EASTMONEY_UT,
             "_": "1",
         }
         # 部分网络环境下 push2 会拒绝无 Referer 的请求，带上以提升可用性
-        headers = dict(self._headers, Referer="https://quote.eastmoney.com/")
+        headers = dict(self._headers, Referer=EASTMONEY_REFERER)
         resp = self._session.get(
             self.URL, params=params, headers=headers, timeout=timeout)
         debug_log(f"  {self.name} HTTP={resp.status_code} len={len(resp.content)}")
