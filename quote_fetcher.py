@@ -11,10 +11,13 @@
 无需鉴权，运行时联网获取。
 """
 
+from __future__ import annotations
+
 import os
 import time
 import threading
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, date, timedelta
 
@@ -24,7 +27,7 @@ from urllib3.util.retry import Retry
 
 from config import (
     BG_TIMEOUT, MENU_TIMEOUT, CONFIG_DIR, CACHE_MAX_AGE,
-    TENCENT_URL, SINA_URL, EASTMONEY_URL, TRADING_SESSIONS,
+    TENCENT_URL, SINA_URL, EASTMONEY_URL, A_SHARE_SESSIONS,
     HTTP_HEADERS, HTTP_RETRY_TOTAL, HTTP_RETRY_BACKOFF,
     HTTP_RETRY_STATUS_FORCELIST, HTTP_POOL_CONNECTIONS, HTTP_POOL_MAXSIZE,
     SINA_REFERER, EASTMONEY_REFERER, EASTMONEY_UT, EASTMONEY_FIELDS,
@@ -36,7 +39,7 @@ from config import (
 _DEBUG_LOG = os.path.join(CONFIG_DIR, "debug.log")
 
 
-def debug_log(msg):
+def debug_log(msg: str) -> None:
     """追加写入 %APPDATA%/StockTray/debug.log（不影响主流程）。"""
     try:
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -46,7 +49,7 @@ def debug_log(msg):
         pass
 
 
-def _clear_debug_log():
+def _clear_debug_log() -> None:
     """启动时清空日志，避免无限增长。"""
     try:
         open(_DEBUG_LOG, "w", encoding="utf-8").close()
@@ -58,7 +61,7 @@ def _clear_debug_log():
 # 行情数据行
 # ============================================================================
 @dataclass
-class QuoteRow:
+class QuoteSnapshot:
     """单只股票的行情快照。"""
     code: str
     name: str
@@ -68,7 +71,7 @@ class QuoteRow:
     error: str = ""
 
     @classmethod
-    def fail(cls, code, error=""):
+    def failed(cls, code: str, error: str = "") -> QuoteSnapshot:
         return cls(code=code, name=code, ok=False, error=error)
 
 
@@ -80,18 +83,18 @@ class QuoteSource(ABC):
 
     子类需实现 fetch() 方法：
         - 输入：股票代码列表 + 超时秒数
-        - 输出：dict[str, QuoteRow]（code → QuoteRow）
+        - 输出：dict[str, QuoteSnapshot]（code → QuoteSnapshot）
         - 异常：网络错误或数据无效时 raise，由调用方决定 fallback
 
     基类提供共享的 HTTP 会话和通用工具方法，子类无需关心网络层细节。
     """
 
     # 共享 HTTP 基础设施（类级别，所有子类共用同一连接池）
-    _session: requests.Session = None
-    _headers: dict = None
+    _session: requests.Session | None = None
+    _headers: dict[str, str] | None = None
 
     @classmethod
-    def _init_http(cls):
+    def _init_http(cls) -> None:
         """懒初始化 HTTP 会话与请求头（首次使用时创建）。"""
         if cls._session is None:
             s = requests.Session()
@@ -108,7 +111,7 @@ class QuoteSource(ABC):
     # ---- 通用工具方法 ----
 
     @staticmethod
-    def to_float(v):
+    def to_float(v: object) -> float:
         """安全转 float（容忍 '12.34%' 这类带百分号的值）。"""
         if v is None:
             return 0.0
@@ -118,7 +121,7 @@ class QuoteSource(ABC):
             return 0.0
 
     @staticmethod
-    def valid_price(v):
+    def is_valid_price(v: object) -> bool:
         """判断价格是否为有效数值（剔除 '-' / '' / None / nan）。"""
         if v is None:
             return False
@@ -132,12 +135,12 @@ class QuoteSource(ABC):
             return False
 
     @staticmethod
-    def norm_name(name):
+    def norm_name(name: str) -> str:
         """折叠名称中的多余空白（部分接口偶有空格，如『五 粮 液』）。"""
         return "".join(str(name).split()) if name else ""
 
     @staticmethod
-    def decode_gbk(resp):
+    def decode_gbk(resp: requests.Response) -> str:
         """腾讯/新浪返回 GBK 编码，手动设定避免中文乱码。"""
         try:
             resp.encoding = "gb18030"
@@ -146,7 +149,7 @@ class QuoteSource(ABC):
         return resp.text
 
     @staticmethod
-    def normalize_code(code):
+    def normalize_code(code: str) -> str:
         """标准化股票代码为 sh/sz/bj 前缀格式（腾讯/新浪需要）。
 
         已有前缀的直接返回，纯数字按首位判定市场：
@@ -178,7 +181,7 @@ class QuoteSource(ABC):
         return c
 
     @staticmethod
-    def resolve_secid(code):
+    def resolve_secid(code: str) -> str:
         """股票代码 → 东方财富 secid（仅 EastmoneySource 使用）。
 
         东方财富市场编号：1=沪市，0=深市/北交所。
@@ -213,8 +216,8 @@ class QuoteSource(ABC):
 
     @abstractmethod
     def fetch(self, codes: list[str], timeout: float = BG_TIMEOUT
-              ) -> dict[str, QuoteRow]:
-        """批量获取行情。返回 {code: QuoteRow}，整体失败时 raise。"""
+              ) -> dict[str, QuoteSnapshot]:
+        """批量获取行情。返回 {code: QuoteSnapshot}，整体失败时 raise。"""
 
 
 # ============================================================================
@@ -226,17 +229,18 @@ class TencentSource(QuoteSource):
     URL = TENCENT_URL
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "腾讯"
 
-    def fetch(self, codes, timeout=BG_TIMEOUT):
+    def fetch(self, codes: list[str], timeout: float = BG_TIMEOUT
+              ) -> dict[str, QuoteSnapshot]:
         self._init_http()
         # 标准化代码（纯数字 → sh/sz 前缀）→ 原始代码 的映射
         # 结果字典以"原始代码"为键，与 QuoteFetcher.fetch 的查找键保持一致
         norm_map = {self.normalize_code(c): c.strip().lower() for c in codes}
-        secs = ",".join(norm_map.keys())
+        sec_codes = ",".join(norm_map.keys())
         resp = self._session.get(
-            self.URL + secs, headers=self._headers, timeout=timeout)
+            self.URL + sec_codes, headers=self._headers, timeout=timeout)
         debug_log(f"  {self.name} HTTP={resp.status_code} len={len(resp.content)}")
         resp.raise_for_status()
         text = self.decode_gbk(resp)
@@ -259,9 +263,9 @@ class TencentSource(QuoteSource):
                 continue
             name = self.norm_name(parts[1])
             price = self.to_float(parts[3])
-            if not self.valid_price(price):
+            if not self.is_valid_price(price):
                 continue
-            quotes[orig] = QuoteRow(
+            quotes[orig] = QuoteSnapshot(
                 code=orig, name=name or orig,
                 price=price, pct=self.to_float(parts[32]))
         if not quotes:
@@ -275,17 +279,18 @@ class SinaSource(QuoteSource):
     URL = SINA_URL
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "新浪"
 
-    def fetch(self, codes, timeout=BG_TIMEOUT):
+    def fetch(self, codes: list[str], timeout: float = BG_TIMEOUT
+              ) -> dict[str, QuoteSnapshot]:
         self._init_http()
         # 新浪接口需要带前缀的代码，否则返回鉴权失败
         norm_map = {self.normalize_code(c): c.strip().lower() for c in codes}
-        secs = ",".join(norm_map.keys())
+        sec_codes = ",".join(norm_map.keys())
         headers = dict(self._headers, Referer=SINA_REFERER)
         resp = self._session.get(
-            self.URL + secs, headers=headers, timeout=timeout)
+            self.URL + sec_codes, headers=headers, timeout=timeout)
         debug_log(f"  {self.name} HTTP={resp.status_code} len={len(resp.content)}")
         resp.raise_for_status()
         text = self.decode_gbk(resp)
@@ -309,11 +314,11 @@ class SinaSource(QuoteSource):
             name = self.norm_name(parts[0])
             price = self.to_float(parts[3])
             prev_close = self.to_float(parts[2])
-            if not self.valid_price(price):
+            if not self.is_valid_price(price):
                 continue
             chg = price - prev_close if prev_close else 0.0
             pct = (chg / prev_close * 100.0) if prev_close else 0.0
-            quotes[orig] = QuoteRow(
+            quotes[orig] = QuoteSnapshot(
                 code=orig, name=name or orig, price=price, pct=pct)
         if not quotes:
             raise RuntimeError(f"{self.name}接口未返回任何有效数据")
@@ -326,10 +331,11 @@ class EastmoneySource(QuoteSource):
     URL = EASTMONEY_URL
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "东方财富"
 
-    def fetch(self, codes, timeout=BG_TIMEOUT):
+    def fetch(self, codes: list[str], timeout: float = BG_TIMEOUT
+              ) -> dict[str, QuoteSnapshot]:
         self._init_http()
         secids = ",".join(self.resolve_secid(c) for c in codes)
         params = {
@@ -360,9 +366,9 @@ class EastmoneySource(QuoteSource):
                 continue
             name = row.get("f14") or c
             price = row.get("f2")
-            if not self.valid_price(price):
+            if not self.is_valid_price(price):
                 continue
-            quotes[c.strip().lower()] = QuoteRow(
+            quotes[c.strip().lower()] = QuoteSnapshot(
                 code=c.strip().lower(), name=name,
                 price=price, pct=self.to_float(row.get("f3")))
         if not quotes:
@@ -388,32 +394,34 @@ class QuoteFetcher:
 
     DEFAULT_SOURCES = [TencentSource, SinaSource, EastmoneySource]
 
-    def __init__(self, sources=None):
+    def __init__(self, sources: list[QuoteSource | type[QuoteSource]] | None = None,
+                 schedule: TradingSchedule | None = None) -> None:
         self._sources: list[QuoteSource] = [
             s() if isinstance(s, type) else s
             for s in (sources or self.DEFAULT_SOURCES)
         ]
-        self._lock = threading.Lock()
-        self._fetching = False
-        self._cache: dict = {
-            "rows": None,      # list[QuoteRow] | None
-            "time": 0.0,
-            "error": None,
-            "trading": True,
+        self._schedule: TradingSchedule = schedule or TradingSchedule()
+        self._lock: threading.Lock = threading.Lock()
+        self._fetching: bool = False
+        self._cache: dict[str, object] = {
+            "rows": None,      # list[QuoteSnapshot] | None
+            "time": 0.0,       # float
+            "error": None,     # str | None
+            "trading": True,   # bool
         }
-        self._last_success_time = 0.0
+        self._last_success_time: float = 0.0
 
     # ---- 公共属性 ----
 
     @property
-    def cache(self):
+    def cache(self) -> dict[str, object]:
         """返回缓存快照的只读副本。"""
         with self._lock:
             return dict(self._cache)
 
     # ---- 刷新判断 ----
 
-    def needs_refresh(self, now=None):
+    def needs_refresh(self, now: datetime | None = None) -> bool:
         """判断当前是否需要重新拉取行情。
 
         规则：
@@ -435,14 +443,15 @@ class QuoteFetcher:
         if trading:
             return (time.time() - cache_t) > CACHE_MAX_AGE
 
-        last_open = TradingSchedule.today_last_open(now)
+        last_open = self._schedule.today_last_open(now)
         if last_open is None:
             return False
         return last_success < last_open.timestamp()
 
     # ---- 核心拉取 ----
 
-    def fetch(self, codes, timeout=BG_TIMEOUT):
+    def fetch(self, codes: list[str], timeout: float = BG_TIMEOUT
+              ) -> list[QuoteSnapshot]:
         """多数据源依次尝试；整体成功即停，整体失败才 fallback。"""
         if not codes:
             return []
@@ -471,7 +480,7 @@ class QuoteFetcher:
             else:
                 err_msg = ("全部数据源失败"
                            + (f"（{last_err}）" if last_err else ""))
-                out.append(QuoteRow.fail(c, err_msg))
+                out.append(QuoteSnapshot.failed(c, err_msg))
 
         for r in out:
             if not r.ok:
@@ -480,10 +489,11 @@ class QuoteFetcher:
 
     # ---- 缓存操作（线程安全）----
 
-    def refresh(self, codes_fn, timeout=BG_TIMEOUT):
+    def refresh(self, codes_fn: Callable[[], list[str]],
+                timeout: float = BG_TIMEOUT) -> bool:
         """拉取行情并写入缓存（带并发保护）。
 
-        codes_fn: 返回股票代码列表的可调用对象（如 load_config）。
+        codes_fn: 返回股票代码列表的可调用对象（如 load_codes）。
         返回 True 表示本次实际执行了拉取。
         """
         with self._lock:
@@ -491,7 +501,7 @@ class QuoteFetcher:
                 return False
             self._fetching = True
         try:
-            trading = TradingSchedule.is_open()
+            trading = self._schedule.is_open()
             codes = codes_fn()
             if not codes:
                 self._update_cache(
@@ -509,12 +519,14 @@ class QuoteFetcher:
             with self._lock:
                 self._fetching = False
 
-    def get_cached(self):
+    def get_cached(self) -> tuple[list[QuoteSnapshot] | None, str | None]:
         """返回缓存快照 (rows, error)。"""
         with self._lock:
             return self._cache["rows"], self._cache["error"]
 
-    def get_for_menu(self, codes_fn, skip_fetch=False):
+    def get_for_menu(self, codes_fn: Callable[[], list[str]],
+                    skip_fetch: bool = False
+                    ) -> tuple[list[QuoteSnapshot] | None, str | None]:
         """菜单专用读取：按需同步刷新后返回缓存。
 
         skip_fetch=True 时仅返回缓存（用于启动阶段避免阻塞）。
@@ -526,7 +538,8 @@ class QuoteFetcher:
 
     # ---- 内部方法 ----
 
-    def _update_cache(self, rows, trading=True, error=None):
+    def _update_cache(self, rows: list[QuoteSnapshot] | None,
+                      trading: bool = True, error: str | None = None) -> None:
         with self._lock:
             self._cache.update(
                 rows=rows, time=time.time(),
@@ -537,55 +550,63 @@ class QuoteFetcher:
 # 交易时段工具
 # ============================================================================
 class TradingSchedule:
-    """A 股交易时段（周一~周五，含开盘前后缓冲）。
+    """交易时段判断器（默认 A 股时段，周一~周五，含开盘前后缓冲）。
 
-    上午 09:15 ~ 11:35，下午 13:00 ~ 15:05。
+    默认时段：上午 09:15 ~ 11:35，下午 13:00 ~ 15:05。
     节假日不在此列，但非交易时段显示收盘价，不影响使用。
+
+    支持自定义时段（用于港股/美股/自定义市场）：
+
+        hk_sessions = [
+            (9 * 60 + 30, 12 * 60),       # 上午 09:30 ~ 12:00
+            (13 * 60, 16 * 60),            # 下午 13:00 ~ 16:00
+        ]
+        schedule = TradingSchedule(sessions=hk_sessions)
+        fetcher = QuoteFetcher(schedule=schedule)
     """
 
-    # 每个交易日的两个时段（分钟数表示），从 config 读取
-    _SESSIONS = TRADING_SESSIONS
+    def __init__(self, sessions: list[tuple[int, int]] | None = None) -> None:
+        """
+        :param sessions: 每日交易时段列表，元素为 (起始分钟, 结束分钟) 元组。
+                         不传则使用 config.A_SHARE_SESSIONS（A 股默认时段）。
+        """
+        self._sessions: list[tuple[int, int]] = sessions or A_SHARE_SESSIONS
 
-    @classmethod
-    def _open_times(cls, d: date):
+    def _open_times(self, d: date) -> list[datetime]:
         """返回交易日 d 的两个开盘时刻。"""
         return [
             datetime(d.year, d.month, d.day, m // 60, m % 60)
-            for m, _ in cls._SESSIONS
+            for m, _ in self._sessions
         ]
 
-    @classmethod
-    def is_open(cls, now=None):
+    def is_open(self, now: datetime | None = None) -> bool:
         """当前是否为交易时段。"""
         now = now or datetime.now()
         if now.weekday() >= 5:
             return False
         hm = now.hour * 60 + now.minute
-        return any(lo <= hm <= hi for lo, hi in cls._SESSIONS)
+        return any(lo <= hm <= hi for lo, hi in self._sessions)
 
-    @classmethod
-    def today_last_open(cls, now=None):
+    def today_last_open(self, now: datetime | None = None) -> datetime | None:
         """今天最后一个开盘时刻（非交易日返回 None）。"""
         now = now or datetime.now()
         if now.weekday() >= 5:
             return None
-        return cls._open_times(now.date())[-1]
+        return self._open_times(now.date())[-1]
 
-    @classmethod
-    def next_open(cls, now=None):
+    def next_open(self, now: datetime | None = None) -> datetime:
         """下一个开盘时刻（从今天起最多向前找 7 天）。"""
         now = now or datetime.now()
         for d in range(8):
             day = (now + timedelta(days=d)).date()
             if day.weekday() >= 5:
                 continue
-            for t in cls._open_times(day):
+            for t in self._open_times(day):
                 if t > now:
                     return t
         return now + timedelta(days=1)
 
-    @classmethod
-    def seconds_until_next(cls, now=None):
+    def seconds_until_next_open(self, now: datetime | None = None) -> float:
         """距离下一个开盘时刻还有多少秒。"""
         now = now or datetime.now()
-        return max(0, (cls.next_open(now) - now).total_seconds())
+        return max(0, (self.next_open(now) - now).total_seconds())

@@ -20,7 +20,7 @@ from datetime import datetime
 import tkinter as tk
 from pystray import Icon, Menu, MenuItem
 
-from quote_fetcher import QuoteFetcher, TradingSchedule, QuoteRow, debug_log, _clear_debug_log
+from quote_fetcher import QuoteFetcher, TradingSchedule, QuoteSnapshot, debug_log, _clear_debug_log
 
 from config import (
     APP_NAME, APP_TITLE, BUILD,
@@ -52,7 +52,7 @@ class StockConfig:
             with open(self.path, "w", encoding="utf-8") as f:
                 f.write("\n".join(DEFAULT_STOCKS) + "\n")
 
-    def load(self):
+    def load_codes(self):
         """读取自选股代码列表。"""
         try:
             with open(self.path, encoding="utf-8") as f:
@@ -157,7 +157,7 @@ class StockMenuWindow:
 
     def _build(self):
         c = self._colors
-        rows, error = self._fetcher.get_for_menu(self._config.load)
+        rows, error = self._fetcher.get_for_menu(self._config.load_codes)
 
         # 顶部标题行（可点击刷新）
         self._build_header()
@@ -175,8 +175,8 @@ class StockMenuWindow:
                 ok_rows = sorted(
                     (r for r in rows if r.ok),
                     key=lambda r: r.pct, reverse=True)
-                fail_rows = [r for r in rows if not r.ok]
-                for row in ok_rows + fail_rows:
+                failed_rows = [r for r in rows if not r.ok]
+                for row in ok_rows + failed_rows:
                     self._add_stock_row(row)
 
         self._add_separator()
@@ -221,7 +221,7 @@ class StockMenuWindow:
         self._add_clickable("  ⚙ 修改自选股", c["fg"], self._do_edit)
         self._add_clickable("  ✕ 退出", c["fg"], self._do_exit)
 
-    def _add_stock_row(self, row: QuoteRow):
+    def _add_stock_row(self, row: QuoteSnapshot):
         c = self._colors
 
         if not row.ok:
@@ -314,7 +314,7 @@ class StockMenuWindow:
         self._destroy()
 
         def _refresh():
-            self._fetcher.refresh(self._config.load, timeout=MENU_TIMEOUT)
+            self._fetcher.refresh(self._config.load_codes, timeout=MENU_TIMEOUT)
         threading.Thread(target=_refresh, daemon=True).start()
 
     def _do_edit(self):
@@ -378,8 +378,9 @@ class StockTrayApp:
 
     def __init__(self):
         self._config = StockConfig()
-        self._fetcher = QuoteFetcher()
-        self._icon: Icon | None = None
+        self._schedule = TradingSchedule()
+        self._fetcher = QuoteFetcher(schedule=self._schedule)
+        self._icon = None
         self._root: tk.Tk | None = None
         self._popup: StockMenuWindow | None = None
         self._menu_event = threading.Event()
@@ -387,7 +388,7 @@ class StockTrayApp:
     # ---- 托盘图标 ----
 
     @staticmethod
-    def _build_icon():
+    def _resolve_icon_path():
         """返回 icon.ico 文件路径（PyInstaller 打包时通过 datas 嵌入）。"""
         if getattr(sys, 'frozen', False):
             base = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
@@ -431,7 +432,7 @@ class StockTrayApp:
         while True:
             try:
                 now = datetime.now()
-                is_trading = TradingSchedule.is_open(now)
+                is_trading = self._schedule.is_open(now)
                 mtime = self._config.mtime()
                 config_changed = mtime != last_mtime
                 last_mtime = mtime
@@ -439,7 +440,7 @@ class StockTrayApp:
                 if (first_run or is_trading
                         or config_changed
                         or self._fetcher.needs_refresh(now)):
-                    self._fetcher.refresh(self._config.load, timeout=BG_TIMEOUT)
+                    self._fetcher.refresh(self._config.load_codes, timeout=BG_TIMEOUT)
                     self._rebuild_popup()
                 first_run = False
 
@@ -447,7 +448,7 @@ class StockTrayApp:
                     self._menu_event.wait(BG_REFRESH_INTERVAL)
                     self._menu_event.clear()
                 else:
-                    wait = TradingSchedule.seconds_until_next(now)
+                    wait = self._schedule.seconds_until_next_open(now)
                     if wait > 0:
                         debug_log(f"非交易时段，等待 {wait:.0f}s 到下一个开盘时刻")
                         self._menu_event.wait(wait)
@@ -465,7 +466,7 @@ class StockTrayApp:
         self._root.withdraw()
         debug_log(f"=== StockTray 启动 build={BUILD} ===")
 
-        icon_path = self._build_icon()
+        icon_path = self._resolve_icon_path()
         self._icon = TrayIcon(
             APP_NAME, icon_path, APP_TITLE,
             icon_path=icon_path,
