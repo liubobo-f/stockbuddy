@@ -20,7 +20,7 @@ from datetime import datetime
 import tkinter as tk
 from pystray import Icon, Menu, MenuItem
 
-from quote_fetcher import QuoteFetcher, TradingSchedule, QuoteRow, debug_log
+from quote_fetcher import QuoteFetcher, TradingSchedule, QuoteRow, debug_log, _clear_debug_log
 
 from config import (
     APP_NAME, APP_TITLE, BUILD,
@@ -91,22 +91,6 @@ class StockConfig:
 
 
 # ============================================================================
-# 系统主题检测
-# ============================================================================
-def _detect_theme():
-    """读取 Windows 注册表判断系统主题（深色/浅色）。"""
-    try:
-        with winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
-        ) as key:
-            val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
-            return THEME_DARK if val == 0 else THEME_LIGHT
-    except OSError:
-        return THEME_LIGHT
-
-
-# ============================================================================
 # 自定义行情弹窗菜单
 # ============================================================================
 class StockMenuWindow:
@@ -122,7 +106,7 @@ class StockMenuWindow:
         self._config = config
         self._icon = icon
 
-        self._theme = _detect_theme()
+        self._theme = self._detect_theme()
         self._colors = COLOR_PALETTE[self._theme]
         debug_log(f"弹窗主题: {self._theme}")
 
@@ -140,6 +124,34 @@ class StockMenuWindow:
         # 失去焦点时自动关闭
         self._win.bind("<FocusOut>", self._on_focus_out)
         self._win.bind("<Escape>", lambda e: self._destroy())
+
+    @staticmethod
+    def _detect_theme():
+        """读取 Windows 注册表判断系统主题（深色/浅色）。"""
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            ) as key:
+                val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+                return THEME_DARK if val == 0 else THEME_LIGHT
+        except OSError:
+            return THEME_LIGHT
+
+    def _bind_hover(self, widget, normal_bg):
+        """给 widget 及其子元素绑定 hover 效果（进入改色，离开恢复）。"""
+        hover_bg = self._colors["hover"]
+
+        def apply(bg):
+            widget.configure(bg=bg)
+            for w in widget.winfo_children():
+                w.configure(bg=bg)
+
+        widget.bind("<Enter>", lambda e: apply(hover_bg))
+        widget.bind("<Leave>", lambda e: apply(normal_bg))
+        for w in widget.winfo_children():
+            w.bind("<Enter>", lambda e: apply(hover_bg))
+            w.bind("<Leave>", lambda e: apply(normal_bg))
 
     # ---- 构建界面 ----
 
@@ -202,22 +214,7 @@ class StockMenuWindow:
         for child in header.winfo_children():
             child.bind("<Button-1>", lambda e: self._do_refresh())
 
-        # hover 效果
-        def _hover_on(e):
-            header.configure(bg=c["hover"])
-            for w in header.winfo_children():
-                w.configure(bg=c["hover"])
-
-        def _hover_off(e):
-            header.configure(bg=c["header_bg"])
-            for w in header.winfo_children():
-                w.configure(bg=c["header_bg"])
-
-        header.bind("<Enter>", _hover_on)
-        header.bind("<Leave>", _hover_off)
-        for child in header.winfo_children():
-            child.bind("<Enter>", _hover_on)
-            child.bind("<Leave>", _hover_off)
+        self._bind_hover(header, c["header_bg"])
 
     def _build_footer(self):
         c = self._colors
@@ -265,22 +262,7 @@ class StockMenuWindow:
             anchor="e", width=UI_LABEL_WIDTH,
         ).pack(side="right", pady=3)
 
-        # hover 效果
-        def _hover_on(e):
-            frame.configure(bg=c["hover"])
-            for w in frame.winfo_children():
-                w.configure(bg=c["hover"])
-
-        def _hover_off(e):
-            frame.configure(bg=c["bg"])
-            for w in frame.winfo_children():
-                w.configure(bg=c["bg"])
-
-        frame.bind("<Enter>", _hover_on)
-        frame.bind("<Leave>", _hover_off)
-        for child in frame.winfo_children():
-            child.bind("<Enter>", _hover_on)
-            child.bind("<Leave>", _hover_off)
+        self._bind_hover(frame, c["bg"])
 
     def _add_separator(self):
         sep = tk.Frame(self._win, height=1, bg=self._colors["separator"])
@@ -303,15 +285,7 @@ class StockMenuWindow:
         )
         label.pack(fill="x", padx=UI_PAD_X, pady=4)
         label.bind("<Button-1>", lambda e: callback())
-
-        def _hover_on(e):
-            label.configure(bg=self._colors["hover"])
-
-        def _hover_off(e):
-            label.configure(bg=self._colors["bg"])
-
-        label.bind("<Enter>", _hover_on)
-        label.bind("<Leave>", _hover_off)
+        self._bind_hover(label, self._colors["bg"])
 
     # ---- 窗口定位 ----
 
@@ -423,24 +397,25 @@ class StockTrayApp:
 
     # ---- 弹窗菜单 ----
 
+    def _create_popup(self):
+        """创建新弹窗并聚焦。"""
+        self._popup = StockMenuWindow(
+            self._root, self._fetcher, self._config, self._icon)
+        self._popup._win.focus_force()
+
     def _show_popup(self):
         """显示行情弹窗（若已打开则关闭）。"""
         if self._popup and self._popup._win:
             self._popup._destroy()
             self._popup = None
             return
-
-        self._popup = StockMenuWindow(
-            self._root, self._fetcher, self._config, self._icon)
-        self._popup._win.focus_force()
+        self._create_popup()
 
     def _rebuild_popup(self):
         """后台刷新后重建弹窗（仅弹窗打开时生效）。"""
         if self._popup and self._popup._win:
             self._popup._destroy()
-            self._popup = StockMenuWindow(
-                self._root, self._fetcher, self._config, self._icon)
-            self._popup._win.focus_force()
+            self._create_popup()
 
     # ---- 后台刷新 ----
 
@@ -485,6 +460,7 @@ class StockTrayApp:
 
     def run(self):
         """启动托盘应用。"""
+        _clear_debug_log()
         self._root = tk.Tk()
         self._root.withdraw()
         debug_log(f"=== StockTray 启动 build={BUILD} ===")
