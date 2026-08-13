@@ -74,13 +74,20 @@ class StockConfig:
     def open_in_editor(self):
         """用系统默认文本编辑器打开配置文件。"""
         abs_path = os.path.abspath(self.path)
-        try:
-            subprocess.Popen(["notepad", abs_path])
-        except Exception:
-            if hasattr(os, "startfile"):
+        # 优先用 os.startfile（走 ShellExecute，继承桌面会话，能正常显示窗口）
+        if hasattr(os, "startfile"):
+            try:
                 os.startfile(abs_path, "open")
-            else:
-                subprocess.Popen(["notepad", abs_path])
+                return
+            except OSError:
+                pass
+        # 回退：显式用 System32 下的 notepad（避免命中 WindowsApps 的 stub）
+        notepad = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                               "System32", "notepad.exe")
+        try:
+            subprocess.Popen([notepad, abs_path])
+        except Exception:
+            subprocess.Popen(["notepad", abs_path])
 
 
 # ============================================================================
@@ -94,9 +101,9 @@ def _detect_theme():
             r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
         ) as key:
             val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
-            return _THEME_DARK if val == 0 else _THEME_LIGHT
+            return THEME_DARK if val == 0 else THEME_LIGHT
     except OSError:
-        return _THEME_LIGHT
+        return THEME_LIGHT
 
 
 # ============================================================================
