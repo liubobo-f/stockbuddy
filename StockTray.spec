@@ -26,12 +26,6 @@ a = Analysis(
         # 未使用的第三方依赖
         'matplotlib', 'numpy', 'scipy', 'pandas',
         'cryptography', 'OpenSSL',
-        # 其他不需要的标准库
-        'ipaddress', 'typing', 'importlib',
-        'setuptools', 'pip', 'distutils',
-        'zipfile', 'tarfile', 'lzma', 'bz2',
-        'shelve', 'ftplib', 'imaplib', 'telnetlib',
-        'xmlrpc', 'mailbox', 'cProfile', 'trace',
     ],
     noarchive=False,
     optimize=2,

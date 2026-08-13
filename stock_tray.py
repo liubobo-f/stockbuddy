@@ -524,12 +524,15 @@ class StockTrayApp:
         self._root.withdraw()
         debug_log(f"=== StockTray 启动 build={BUILD} ===")
 
+        icon_path = self._build_icon()
+
         # 托盘图标：左键/右键均直接弹出自定义行情弹窗
         # pystray 要求 menu 含 default MenuItem 才能被 __call__ 触发
         # TrayIcon 覆盖 _on_notify 使右键也走 __call__ 而非原生菜单
+        # 注意：icon 参数不能为 None，否则 pystray 会认为没有图标而不显示
         self._icon = TrayIcon(
-            APP_NAME, None, APP_TITLE,
-            icon_path=self._build_icon(),
+            APP_NAME, icon_path, APP_TITLE,  # 传 icon_path 作为占位符
+            icon_path=icon_path,
             menu=Menu(
                 MenuItem("Show", self._on_icon_click, default=True),
             ))
