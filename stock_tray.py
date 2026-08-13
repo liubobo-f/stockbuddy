@@ -420,6 +420,13 @@ class StockTrayApp:
 
     # ---- 后台刷新 ----
 
+    def _sleep(self, seconds: float, *, note: str = "") -> None:
+        """休眠指定秒数，可被菜单事件提前唤醒。"""
+        if note:
+            debug_log(note)
+        self._menu_event.wait(seconds)
+        self._menu_event.clear()
+
     def _refresh_loop(self):
         """后台刷新循环：
           - 交易时段：每 BG_REFRESH_INTERVAL 秒刷新一次
@@ -427,7 +434,6 @@ class StockTrayApp:
         """
         time.sleep(2)  # 等待托盘图标就绪
         last_mtime = self._config.mtime()
-        first_run = True
 
         while True:
             try:
@@ -437,25 +443,19 @@ class StockTrayApp:
                 config_changed = mtime != last_mtime
                 last_mtime = mtime
 
-                if (first_run or is_trading
-                        or config_changed
-                        or self._fetcher.needs_refresh(now)):
+                # needs_refresh 在缓存为空时返回 True，覆盖了首次启动场景
+                if is_trading or config_changed or self._fetcher.needs_refresh(now):
                     self._fetcher.refresh(self._config.load_codes, timeout=BG_TIMEOUT)
                     self._rebuild_popup()
-                first_run = False
 
                 if is_trading:
-                    self._menu_event.wait(BG_REFRESH_INTERVAL)
-                    self._menu_event.clear()
+                    self._sleep(BG_REFRESH_INTERVAL)
                 else:
                     wait = self._schedule.seconds_until_next_open(now)
                     if wait > 0:
-                        debug_log(f"非交易时段，等待 {wait:.0f}s 到下一个开盘时刻")
-                        self._menu_event.wait(wait)
-                        self._menu_event.clear()
+                        self._sleep(wait, note=f"非交易时段，等待 {wait:.0f}s 到下一个开盘时刻")
             except Exception:
-                self._menu_event.wait(BG_REFRESH_INTERVAL)
-                self._menu_event.clear()
+                self._sleep(BG_REFRESH_INTERVAL)
 
     # ---- 入口 ----
 
