@@ -11,13 +11,13 @@
 
 import os
 import subprocess
+import sys
 import threading
 import time
 import winreg
 from datetime import datetime
 
 import tkinter as tk
-from PIL import Image, ImageDraw
 from pystray import Icon, Menu, MenuItem
 
 from quote_fetcher import QuoteFetcher, TradingSchedule, QuoteRow, debug_log
@@ -395,10 +395,14 @@ class TrayIcon(Icon):
 
     pystray 在 __init__ 中把 _on_notify 绑定方法存入 _message_handlers 字典，
     窗口消息循环从字典中查找处理器。覆盖方法后必须同步更新字典，否则仍调用父类方法。
+
+    同时覆盖 _assert_icon_handle，直接从 .ico 文件加载图标，
+    绕过 pystray 默认的 PIL serialized_image 流程，彻底去除 Pillow 依赖。
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, icon_path=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self._icon_path = icon_path
         # 更新消息处理器字典，指向子类的 _on_notify
         self._message_handlers[0x040B] = self._on_notify  # WM_NOTIFY
 
@@ -406,6 +410,21 @@ class TrayIcon(Icon):
         # WM_LBUTTONUP=0x202(514), WM_RBUTTONUP=0x205(517)
         if lparam in (0x0202, 0x0205):
             self()
+
+    def _assert_icon_handle(self):
+        """直接从 .ico 文件加载图标，不依赖 PIL。"""
+        if self._icon_handle:
+            return
+        from pystray._util import win32
+        if self._icon_path and os.path.isfile(self._icon_path):
+            self._icon_handle = win32.LoadImage(
+                None, self._icon_path, win32.IMAGE_ICON,
+                0, 0, win32.LR_DEFAULTSIZE | win32.LR_LOADFROMFILE)
+        else:
+            # 无 .ico 文件时回退到系统默认图标 (IDI_APPLICATION=32512)
+            self._icon_handle = win32.LoadImage(
+                None, 32512, win32.IMAGE_ICON,
+                0, 0, win32.LR_DEFAULTSIZE | win32.LR_SHARED)
 
 
 # ============================================================================
@@ -430,14 +449,12 @@ class StockTrayApp:
 
     @staticmethod
     def _build_icon():
-        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        draw.rounded_rectangle([4, 4, 60, 60], radius=14,
-                               fill=(0, 122, 204, 255))
-        draw.line([16, 46, 27, 35, 38, 41, 49, 22],
-                  fill=(255, 255, 255, 255), width=4, joint="curve")
-        draw.ellipse([45, 18, 53, 26], fill=(255, 255, 255, 255))
-        return img
+        """返回 icon.ico 文件路径（PyInstaller 打包时通过 datas 嵌入）。"""
+        if getattr(sys, 'frozen', False):
+            base = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+        else:
+            base = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(base, 'icon.ico')
 
     # ---- 弹窗菜单 ----
 
@@ -511,7 +528,8 @@ class StockTrayApp:
         # pystray 要求 menu 含 default MenuItem 才能被 __call__ 触发
         # TrayIcon 覆盖 _on_notify 使右键也走 __call__ 而非原生菜单
         self._icon = TrayIcon(
-            APP_NAME, self._build_icon(), APP_TITLE,
+            APP_NAME, None, APP_TITLE,
+            icon_path=self._build_icon(),
             menu=Menu(
                 MenuItem("Show", self._on_icon_click, default=True),
             ))
