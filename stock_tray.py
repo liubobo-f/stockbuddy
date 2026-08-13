@@ -452,7 +452,7 @@ class StockTrayApp:
             base = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
         else:
             base = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(base, 'icon.ico')
+        return os.path.join(base, 'tray.ico')
 
     # ---- 弹窗菜单 ----
 
