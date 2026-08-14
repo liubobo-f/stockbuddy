@@ -67,6 +67,7 @@ class QuoteSnapshot:
     name: str
     price: float = 0.0
     pct: float = 0.0
+    prev_close: float = 0.0
     ok: bool = True
     error: str = ""
 
@@ -267,7 +268,8 @@ class TencentSource(QuoteSource):
                 continue
             quotes[orig] = QuoteSnapshot(
                 code=orig, name=name or orig,
-                price=price, pct=self.to_float(parts[32]))
+                price=price, pct=self.to_float(parts[32]),
+                prev_close=self.to_float(parts[4]))
         if not quotes:
             raise RuntimeError(f"{self.name}接口未返回任何有效数据")
         return quotes
@@ -319,7 +321,8 @@ class SinaSource(QuoteSource):
             chg = price - prev_close if prev_close else 0.0
             pct = (chg / prev_close * 100.0) if prev_close else 0.0
             quotes[orig] = QuoteSnapshot(
-                code=orig, name=name or orig, price=price, pct=pct)
+                code=orig, name=name or orig,
+                price=price, pct=pct, prev_close=prev_close)
         if not quotes:
             raise RuntimeError(f"{self.name}接口未返回任何有效数据")
         return quotes
@@ -370,7 +373,8 @@ class EastmoneySource(QuoteSource):
                 continue
             quotes[c.strip().lower()] = QuoteSnapshot(
                 code=c.strip().lower(), name=name,
-                price=price, pct=self.to_float(row.get("f3")))
+                price=price, pct=self.to_float(row.get("f3")),
+                prev_close=self.to_float(row.get("f60")))
         if not quotes:
             raise RuntimeError(f"{self.name}无有效行情")
         return quotes

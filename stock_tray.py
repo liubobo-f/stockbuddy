@@ -27,7 +27,7 @@ from config import (
     BG_TIMEOUT, MENU_TIMEOUT, CONFIG_DIR, BG_REFRESH_INTERVAL,
     DEFAULT_STOCKS,
     UI_FONT_FAMILY, UI_HEADER_SIZE, UI_ITEM_SIZE, UI_FOOTER_SIZE,
-    UI_PAD_X, UI_PAD_Y, UI_LABEL_WIDTH,
+    UI_PAD_X, UI_PAD_Y, UI_LABEL_WIDTH, UI_NAME_WIDTH,
     UI_WINDOW_MARGIN_X, UI_WINDOW_MARGIN_Y,
     WM_NOTIFY, WM_LBUTTONUP, WM_RBUTTONUP,
     THEME_LIGHT, THEME_DARK, COLOR_PALETTE,
@@ -53,7 +53,7 @@ class StockConfig:
                 f.write("\n".join(DEFAULT_STOCKS) + "\n")
 
     def load_codes(self):
-        """读取自选股代码列表。"""
+        """读取自选股代码列表（CSV 第一列）。"""
         try:
             with open(self.path, encoding="utf-8") as f:
                 return [
@@ -63,6 +63,32 @@ class StockConfig:
                 ]
         except Exception:
             return list(DEFAULT_STOCKS)
+
+    def load_positions(self):
+        """读取持仓信息（CSV 第二列股数，可选）。
+
+        :return: dict[code(str), shares(int)]，仅含有股数的行。
+        """
+        positions = {}
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    parts = [p.strip() for p in line.split(",")]
+                    if len(parts) < 2:
+                        continue
+                    code = parts[0]
+                    try:
+                        shares = int(float(parts[1]))
+                    except (ValueError, TypeError):
+                        continue
+                    if shares > 0:
+                        positions[code] = shares
+        except Exception:
+            pass
+        return positions
 
     def mtime(self):
         """配置文件修改时间（用于检测用户是否改过自选股）。"""
@@ -158,10 +184,22 @@ class StockMenuWindow:
     def _build(self):
         c = self._colors
         rows, error = self._fetcher.get_for_menu(self._config.load_codes)
+        positions = self._config.load_positions()
 
-        # 顶部标题行（可点击刷新）
-        self._build_header()
-        self._add_separator()
+        # 是否有任何持仓（决定所有行是否预留盈亏列以保持对齐）
+        has_positions = bool(positions)
+
+        # 计算当日总盈亏（仅有持仓且行情成功的股票）
+        total_pnl = 0.0
+        if rows and not error:
+            for r in rows:
+                if r.ok and r.code in positions and r.prev_close > 0:
+                    total_pnl += positions[r.code] * (r.price - r.prev_close)
+
+        # 顶部：有持仓时显示今日盈亏行，无持仓不显示
+        if has_positions:
+            self._build_header(total_pnl)
+            self._add_separator()
 
         if error:
             self._add_text(f"  ⚠ 行情获取失败：{error}", c["error"])
@@ -177,51 +215,68 @@ class StockMenuWindow:
                     key=lambda r: r.pct, reverse=True)
                 failed_rows = [r for r in rows if not r.ok]
                 for row in ok_rows + failed_rows:
-                    self._add_stock_row(row)
+                    self._add_stock_row(row, positions.get(row.code), has_positions)
 
         self._add_separator()
         self._build_footer()
 
-    def _build_header(self):
+    def _build_header(self, total_pnl):
         c = self._colors
-        cache = self._fetcher.cache
-        update_time = cache["time"]
-        is_trading = cache["trading"]
-        time_str = (time.strftime("%H:%M:%S", time.localtime(update_time))
-                    if update_time else "--:--:--")
-        label = "收盘" if not is_trading else "行情"
+        sign = "+" if total_pnl >= 0 else ""
+        fg = (c["up"] if total_pnl > 0
+              else c["down"] if total_pnl < 0 else c["flat"])
 
-        header = tk.Frame(self._win, bg=c["header_bg"], cursor="hand2")
+        header = tk.Frame(self._win, bg=c["header_bg"])
         header.pack(fill="x", padx=1, pady=(1, 0))
 
         tk.Label(
             header,
-            text=f"  📈 自选股票{label}",
-            bg=c["header_bg"], fg=c["header_fg"],
+            text=f"今日盈亏  {sign}{total_pnl:.2f}  ",
+            bg=c["header_bg"], fg=fg,
             font=(UI_FONT_FAMILY, UI_HEADER_SIZE),
-            anchor="w",
-        ).pack(side="left", padx=UI_PAD_X, pady=UI_PAD_Y)
-
-        tk.Label(
-            header,
-            text=f"更新 {time_str}  🔄  ",
-            bg=c["header_bg"], fg=c["header_fg"],
-            font=(UI_FONT_FAMILY, UI_HEADER_SIZE - 1),
             anchor="e",
         ).pack(side="right", padx=UI_PAD_X, pady=UI_PAD_Y)
 
-        header.bind("<Button-1>", lambda e: self._do_refresh())
-        for child in header.winfo_children():
-            child.bind("<Button-1>", lambda e: self._do_refresh())
-
-        self._bind_hover(header, c["header_bg"])
-
     def _build_footer(self):
         c = self._colors
-        self._add_clickable("  ⚙ 修改自选股", c["fg"], self._do_edit)
-        self._add_clickable("  ✕ 退出", c["fg"], self._do_exit)
+        cache = self._fetcher.cache
+        update_time = cache["time"]
+        if update_time:
+            secs_ago = int(time.time() - update_time)
+            if secs_ago < 60:
+                time_str = f"{secs_ago}秒前更新"
+            else:
+                time_str = time.strftime("%H:%M:%S", time.localtime(update_time))
+        else:
+            time_str = "--:--:--"
 
-    def _add_stock_row(self, row: QuoteSnapshot):
+        footer = tk.Frame(self._win, bg=c["bg"])
+        footer.pack(fill="x", padx=1, pady=(3, 5))
+
+        # 左侧：更新时间
+        tk.Label(
+            footer, text=f"  {time_str}",
+            bg=c["bg"], fg=c["flat"],
+            font=(UI_FONT_FAMILY, UI_FOOTER_SIZE),
+        ).pack(side="left", padx=UI_PAD_X, pady=4)
+
+        # 右侧按钮横排（从右到左 pack）
+        for text, callback in [
+            ("✕ 退出", self._do_exit),
+            ("⚙ 自选股", self._do_edit),
+            ("🔄 刷新", self._do_refresh),
+        ]:
+            btn = tk.Label(
+                footer, text=text,
+                bg=c["bg"], fg=c["fg"],
+                font=(UI_FONT_FAMILY, UI_FOOTER_SIZE),
+                cursor="hand2",
+            )
+            btn.pack(side="right", padx=(2, 8), pady=4)
+            btn.bind("<Button-1>", lambda e, cb=callback: cb())
+            self._bind_hover(btn, c["bg"])
+
+    def _add_stock_row(self, row: QuoteSnapshot, shares=None, has_positions=False):
         c = self._colors
 
         if not row.ok:
@@ -235,16 +290,37 @@ class StockMenuWindow:
         price_str = (f"{row.price:.2f}"
                      if isinstance(row.price, (int, float)) else "-")
 
+        # 名称最多显示 6 个字符
+        display_name = row.name[:6] if row.name else row.code
+
+        # 当日持仓盈亏（仅有持仓且昨收价有效时显示）
+        pnl_text = None
+        pnl_color = c["flat"]
+        if shares and row.prev_close > 0:
+            pnl = shares * (row.price - row.prev_close)
+            pnl_sign = "+" if pnl >= 0 else ""
+            pnl_color = (c["up"] if pnl > 0
+                         else c["down"] if pnl < 0 else c["flat"])
+            pnl_text = f"{pnl_sign}{pnl:.2f}"
+
         frame = tk.Frame(self._win, bg=c["bg"])
         frame.pack(fill="x", padx=1)
 
-        # 名称（左对齐）
-        tk.Label(
-            frame, text=row.name,
-            bg=c["bg"], fg=c["fg"],
-            font=(UI_FONT_FAMILY, UI_ITEM_SIZE),
-            anchor="w",
-        ).pack(side="left", padx=(UI_PAD_X, 4), pady=3)
+        # 盈亏列（最右侧）：有持仓显示数值，无持仓但有其他股票持仓时留空占位以对齐
+        if pnl_text is not None:
+            tk.Label(
+                frame, text=pnl_text,
+                bg=c["bg"], fg=pnl_color,
+                font=(UI_FONT_FAMILY, UI_ITEM_SIZE),
+                anchor="e", width=UI_LABEL_WIDTH,
+            ).pack(side="right", padx=(2, UI_PAD_X), pady=3)
+        elif has_positions:
+            tk.Label(
+                frame, text="",
+                bg=c["bg"],
+                font=(UI_FONT_FAMILY, UI_ITEM_SIZE),
+                anchor="e", width=UI_LABEL_WIDTH,
+            ).pack(side="right", padx=(2, UI_PAD_X), pady=3)
 
         # 涨跌幅（右对齐，带颜色）
         tk.Label(
@@ -252,7 +328,7 @@ class StockMenuWindow:
             bg=c["bg"], fg=pct_color,
             font=(UI_FONT_FAMILY, UI_ITEM_SIZE),
             anchor="e", width=UI_LABEL_WIDTH,
-        ).pack(side="right", padx=(2, UI_PAD_X), pady=3)
+        ).pack(side="right", padx=(2, 2), pady=3)
 
         # 价格（右对齐，小数点对齐）
         tk.Label(
@@ -261,6 +337,14 @@ class StockMenuWindow:
             font=(UI_FONT_FAMILY, UI_ITEM_SIZE),
             anchor="e", width=UI_LABEL_WIDTH,
         ).pack(side="right", pady=3)
+
+        # 名称（左对齐，固定宽度使价格列紧贴）
+        tk.Label(
+            frame, text=display_name,
+            bg=c["bg"], fg=c["fg"],
+            font=(UI_FONT_FAMILY, UI_ITEM_SIZE),
+            anchor="w", width=UI_NAME_WIDTH,
+        ).pack(side="left", padx=(UI_PAD_X, 2), pady=3)
 
         self._bind_hover(frame, c["bg"])
 
