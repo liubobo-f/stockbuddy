@@ -9,6 +9,7 @@
 配置文件位置：%APPDATA%/StockTray/stocks.csv
 """
 
+import configparser
 import os
 import subprocess
 import sys
@@ -31,6 +32,8 @@ from config import (
     UI_WINDOW_MARGIN_X, UI_WINDOW_MARGIN_Y,
     WM_NOTIFY, WM_LBUTTONUP, WM_RBUTTONUP,
     THEME_LIGHT, THEME_DARK, COLOR_PALETTE,
+    SORT_MANUAL, SORT_PCT_DESC, SORT_PCT_ASC, SORT_PRICE_DESC, SORT_PRICE_ASC,
+    SORT_CYCLE, DEFAULT_SORT_MODE, SORT_LABELS, SETTINGS_FILE,
 )
 
 
@@ -47,6 +50,7 @@ class StockConfig:
     def __init__(self, config_dir=CONFIG_DIR):
         self.config_dir = config_dir
         self.path = os.path.join(config_dir, "stocks.csv")
+        self.settings_path = os.path.join(config_dir, SETTINGS_FILE)
         os.makedirs(config_dir, exist_ok=True)
         if not os.path.exists(self.path):
             with open(self.path, "w", encoding="utf-8") as f:
@@ -97,6 +101,49 @@ class StockConfig:
         except OSError:
             return 0.0
 
+    # ---- 显示排序模式（settings.ini）----
+
+    _SETTINGS_SECTION = "display"
+    _SETTINGS_KEY_SORT = "sort_mode"
+
+    def load_sort_mode(self):
+        """读取显示排序模式。
+
+        文件缺失、损坏或取值不在 SORT_CYCLE 内时一律回退默认值，
+        保证手改配置不会让弹窗崩掉。
+        """
+        parser = configparser.ConfigParser()
+        try:
+            parser.read(self.settings_path, encoding="utf-8")
+            mode = parser.get(
+                self._SETTINGS_SECTION, self._SETTINGS_KEY_SORT,
+                fallback=DEFAULT_SORT_MODE)
+        except (configparser.Error, OSError):
+            return DEFAULT_SORT_MODE
+        return mode if mode in SORT_CYCLE else DEFAULT_SORT_MODE
+
+    def set_sort_mode(self, mode):
+        """持久化显示排序模式（保留文件内其他配置；写失败不影响本次使用）。"""
+        parser = configparser.ConfigParser()
+        try:
+            parser.read(self.settings_path, encoding="utf-8")
+        except configparser.Error:
+            parser = configparser.ConfigParser()  # 文件损坏则重建
+        if not parser.has_section(self._SETTINGS_SECTION):
+            parser.add_section(self._SETTINGS_SECTION)
+        parser.set(self._SETTINGS_SECTION, self._SETTINGS_KEY_SORT, mode)
+        try:
+            with open(self.settings_path, "w", encoding="utf-8") as f:
+                parser.write(f)
+        except OSError:
+            pass
+
+    @staticmethod
+    def next_sort_mode(current):
+        """返回循环顺序中的下一个排序模式。"""
+        idx = SORT_CYCLE.index(current) if current in SORT_CYCLE else -1
+        return SORT_CYCLE[(idx + 1) % len(SORT_CYCLE)]
+
     def open_in_editor(self):
         """用系统默认文本编辑器打开配置文件。"""
         abs_path = os.path.abspath(self.path)
@@ -117,6 +164,35 @@ class StockConfig:
 
 
 # ============================================================================
+# 显示排序
+# ============================================================================
+# 各模式的排序键与方向：mode -> (key, reverse)
+_SORT_RULES = {
+    SORT_PCT_DESC:   (lambda row: row.pct, True),
+    SORT_PCT_ASC:    (lambda row: row.pct, False),
+    SORT_PRICE_DESC: (lambda row: row.price, True),
+    SORT_PRICE_ASC:  (lambda row: row.price, False),
+}
+
+
+def sort_rows(rows, mode):
+    """按显示排序模式排列行情行。
+
+    - 取数失败的行（ok=False）没有有效数值，任何模式下都固定排在末尾
+    - 「自选序」保持输入顺序，即 stocks.csv 中的行序
+    - 未知 mode（配置被手改坏）回退默认模式，不抛异常
+    """
+    ok_rows = [r for r in rows if r.ok]
+    failed_rows = [r for r in rows if not r.ok]
+
+    if mode == SORT_MANUAL:
+        return ok_rows + failed_rows
+
+    key, reverse = _SORT_RULES.get(mode, _SORT_RULES[DEFAULT_SORT_MODE])
+    return sorted(ok_rows, key=key, reverse=reverse) + failed_rows
+
+
+# ============================================================================
 # 自定义行情弹窗菜单
 # ============================================================================
 class StockMenuWindow:
@@ -126,15 +202,17 @@ class StockMenuWindow:
     支持主题自适应、小数点对齐、点击交互。
     """
 
-    def __init__(self, root, fetcher, config, icon):
+    def __init__(self, root, fetcher, config, icon, on_rebuild=None):
         self._root = root
         self._fetcher = fetcher
         self._config = config
         self._icon = icon
+        self._on_rebuild = on_rebuild
+        self._sort_mode = config.load_sort_mode()
 
         self._theme = self._detect_theme()
         self._colors = COLOR_PALETTE[self._theme]
-        debug_log(f"弹窗主题: {self._theme}")
+        debug_log(f"弹窗主题: {self._theme} 排序: {self._sort_mode}")
 
         self._win = tk.Toplevel(root)
         self._win.overrideredirect(True)
@@ -209,12 +287,8 @@ class StockMenuWindow:
             if not rows:
                 self._add_text("  （暂无自选股）", c["flat"])
             else:
-                # 成功的按涨跌幅降序，失败的放最后
-                ok_rows = sorted(
-                    (r for r in rows if r.ok),
-                    key=lambda r: r.pct, reverse=True)
-                failed_rows = [r for r in rows if not r.ok]
-                for row in ok_rows + failed_rows:
+                # 按当前显示排序模式排列，失败的行固定放最后
+                for row in sort_rows(rows, self._sort_mode):
                     self._add_stock_row(row, positions.get(row.code), has_positions)
 
         self._add_separator()
@@ -260,10 +334,12 @@ class StockMenuWindow:
             font=(UI_FONT_FAMILY, UI_FOOTER_SIZE),
         ).pack(side="left", padx=UI_PAD_X, pady=4)
 
-        # 右侧按钮横排（从右到左 pack）
+        # 右侧按钮横排（从右到左 pack，列表顺序即视觉的右→左）
         for text, callback in [
             ("✕ 退出", self._do_exit),
             ("⚙ 自选股", self._do_edit),
+            ("⇅ " + SORT_LABELS.get(self._sort_mode, SORT_LABELS[DEFAULT_SORT_MODE]),
+             self._do_sort),
             ("🔄 刷新", self._do_refresh),
         ]:
             btn = tk.Label(
@@ -405,6 +481,16 @@ class StockMenuWindow:
         self._destroy()
         self._config.open_in_editor()
 
+    def _do_sort(self):
+        """切换到下一个显示排序模式并重建弹窗（复用行情缓存，不联网）。"""
+        mode = self._config.next_sort_mode(self._sort_mode)
+        self._config.set_sort_mode(mode)
+        debug_log(f"显示排序切换: {self._sort_mode} -> {mode}")
+        if self._on_rebuild:
+            self._on_rebuild()   # 应用层销毁当前弹窗并按新模式重建
+        else:
+            self._destroy()
+
     def _do_exit(self):
         self._destroy()
         self._icon.stop()
@@ -485,7 +571,8 @@ class StockTrayApp:
     def _create_popup(self):
         """创建新弹窗并聚焦。"""
         self._popup = StockMenuWindow(
-            self._root, self._fetcher, self._config, self._icon)
+            self._root, self._fetcher, self._config, self._icon,
+            on_rebuild=self._rebuild_popup)
         self._popup._win.focus_force()
 
     def _show_popup(self):

@@ -96,6 +96,34 @@ WM_LBUTTONUP = 0x0202
 WM_RBUTTONUP = 0x0205
 
 # ============================================================================
+# 显示排序
+# ============================================================================
+# 弹窗底部「排序」按钮循环切换，选择持久化到 %APPDATA%/StockTray/settings.ini
+SORT_MANUAL = "manual"          # 自选序：按 stocks.csv 行序
+SORT_PCT_DESC = "pct_desc"      # 涨幅榜：涨跌幅 高 → 低
+SORT_PCT_ASC = "pct_asc"        # 跌幅榜：涨跌幅 低 → 高
+SORT_PRICE_DESC = "price_desc"  # 价高序：价格 高 → 低
+SORT_PRICE_ASC = "price_asc"    # 价低序：价格 低 → 高
+
+# 循环切换顺序（首位即默认：与历史行为「涨跌幅降序」保持一致）
+SORT_CYCLE = [
+    SORT_PCT_DESC, SORT_PCT_ASC, SORT_PRICE_DESC, SORT_PRICE_ASC, SORT_MANUAL,
+]
+DEFAULT_SORT_MODE = SORT_CYCLE[0]
+
+# 按钮文案
+SORT_LABELS = {
+    SORT_PCT_DESC:   "涨幅榜",
+    SORT_PCT_ASC:    "跌幅榜",
+    SORT_PRICE_DESC: "价高序",
+    SORT_PRICE_ASC:  "价低序",
+    SORT_MANUAL:     "自选序",
+}
+
+# 设置文件（与 stocks.csv 同目录）
+SETTINGS_FILE = "settings.ini"
+
+# ============================================================================
 # 配色方案
 # ============================================================================
 THEME_LIGHT = "light"
