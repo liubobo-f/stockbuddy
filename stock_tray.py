@@ -32,7 +32,7 @@ from config import (
     UI_WINDOW_MARGIN_X, UI_WINDOW_MARGIN_Y,
     WM_NOTIFY, WM_LBUTTONUP, WM_RBUTTONUP,
     THEME_LIGHT, THEME_DARK, COLOR_PALETTE,
-    SORT_MANUAL, SORT_PCT_DESC, SORT_PCT_ASC, SORT_PRICE_DESC, SORT_PRICE_ASC,
+    SORT_MANUAL, SORT_PCT_DESC, SORT_PCT_ASC, SORT_MARKET_VALUE,
     SORT_CYCLE, DEFAULT_SORT_MODE, SORT_LABELS, SETTINGS_FILE,
 )
 
@@ -167,26 +167,38 @@ class StockConfig:
 # 显示排序
 # ============================================================================
 # 各模式的排序键与方向：mode -> (key, reverse)
+# 「仓位序」需要持仓数据，单独在 sort_rows 里处理，不放这里
 _SORT_RULES = {
-    SORT_PCT_DESC:   (lambda row: row.pct, True),
-    SORT_PCT_ASC:    (lambda row: row.pct, False),
-    SORT_PRICE_DESC: (lambda row: row.price, True),
-    SORT_PRICE_ASC:  (lambda row: row.price, False),
+    SORT_PCT_DESC: (lambda row: row.pct, True),
+    SORT_PCT_ASC:  (lambda row: row.pct, False),
 }
 
 
-def sort_rows(rows, mode):
+def sort_rows(rows, mode, positions=None):
     """按显示排序模式排列行情行。
 
     - 取数失败的行（ok=False）没有有效数值，任何模式下都固定排在末尾
     - 「自选序」保持输入顺序，即 stocks.csv 中的行序
+    - 「仓位序」有持仓的按市值（现价 × 股数）降序；无持仓的排其后并保持
+      输入顺序；占比 = 市值 ÷ 总市值，分母为常数，故直接按市值比即可
     - 未知 mode（配置被手改坏）回退默认模式，不抛异常
+
+    :param positions: dict[code, shares]，仅含有持仓股数的股票（仓位序用）
     """
+    positions = positions or {}
     ok_rows = [r for r in rows if r.ok]
     failed_rows = [r for r in rows if not r.ok]
 
     if mode == SORT_MANUAL:
         return ok_rows + failed_rows
+
+    if mode == SORT_MARKET_VALUE:
+        held = sorted(
+            (r for r in ok_rows if r.code in positions),
+            key=lambda r: positions[r.code] * r.price,
+            reverse=True)
+        unheld = [r for r in ok_rows if r.code not in positions]
+        return held + unheld + failed_rows
 
     key, reverse = _SORT_RULES.get(mode, _SORT_RULES[DEFAULT_SORT_MODE])
     return sorted(ok_rows, key=key, reverse=reverse) + failed_rows
@@ -288,7 +300,7 @@ class StockMenuWindow:
                 self._add_text("  （暂无自选股）", c["flat"])
             else:
                 # 按当前显示排序模式排列，失败的行固定放最后
-                for row in sort_rows(rows, self._sort_mode):
+                for row in sort_rows(rows, self._sort_mode, positions):
                     self._add_stock_row(row, positions.get(row.code), has_positions)
 
         self._add_separator()
